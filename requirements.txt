@@ -1,0 +1,17 @@
+# Framework Web
+Flask==2.3.2
+
+# Conector para o MySQL
+mysql-connector-python==8.0.33
+
+# Para carregar variáveis de ambiente do arquivo .env
+python-dotenv==1.0.0
+
+# AWS SDK para Python
+boto3==1.26.151
+
+# ORM para o banco de dados
+Flask-SQLAlchemy==3.0.3
+
+# Para criptografia de senhas
+Flask-Bcrypt==1.0.1
