@@ -1,20 +1,19 @@
 version: '3.8'
 
 services:
-  # Serviço da nossa API Python/Flask
   web:
     build: .
     command: python app/main.py
     volumes:
       - .:/app
     ports:
-      - "5001:5000" # Mapeia a porta 5000 do container para a 5001 da sua máquina
+      - "5001:5000"
     env_file:
-      - .env # Carrega as variáveis de ambiente do arquivo .env
+      - .env
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
-  # Serviço do Banco de Dados MySQL
   db:
     image: mysql:8.0
     volumes:
@@ -25,7 +24,12 @@ services:
       - MYSQL_USER=${MYSQL_USER}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD}
     ports:
-      - "3306:3306" # Mapeia a porta 3306 do container para a 3306 da sua máquina
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   mysql_data:

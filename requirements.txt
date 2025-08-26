@@ -15,3 +15,5 @@ Flask-SQLAlchemy==3.0.3
 
 # Para criptografia de senhas
 Flask-Bcrypt==1.0.1
+
+gunicorn==21.2.0
