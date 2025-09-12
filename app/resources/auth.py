@@ -1,6 +1,6 @@
 from flask import request
 from flask_restx import Namespace, Resource
-from models import UserModel
+from ..models import UserModel
 
 auth_ns = Namespace('auth', description='Operações de Autenticação')
 

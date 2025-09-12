@@ -1,4 +1,4 @@
-from extensions import db, bcrypt
+from .extensions import db, bcrypt
 
 class UserModel(db.Model):
     __tablename__ = 'users'

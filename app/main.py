@@ -3,7 +3,7 @@ from flask import Flask
 from dotenv import load_dotenv
 from flask_restx import Api
 
-from extensions import db, bcrypt
+from .extensions import db, bcrypt
 
 def create_app():
     load_dotenv()
@@ -25,7 +25,7 @@ def create_app():
     db.init_app(app)
     bcrypt.init_app(app)
 
-    from resources.auth import auth_ns
+    from .resources.auth import auth_ns
     
     api.add_namespace(auth_ns, path='/auth')
 
