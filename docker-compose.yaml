@@ -1,0 +1,83 @@
+services:
+  #### Serviços de produção
+
+  API_SQL_PROD:
+    image: api_mysql:prod
+    volumes:
+      - ./api_mysql/:/app/
+    ports:
+      - "5000:5000"
+    env_file:
+      - ./config/api_mysql_prod.env
+    networks:
+      - druna_net
+    restart: on-failure
+
+  NGINX:
+      image: nginx_px
+      volumes:
+        - ./nginx/templates:/etc/nginx/templates
+        - ./nginx/config/nginx.conf:/etc/nginx/nginx.conf
+      ports:
+        - "81:80"
+      environment:
+        - NGINX_HOST=foobar.com
+        - NGINX_PORT=80
+      networks:
+        - druna_net
+
+  #### Serviços de teste
+
+  API_SQL_TEST:
+    image: api_mysql:test
+    volumes:
+      - ./api_mysql/:/app/
+      - ./db_populate/:/app/db_populate/
+    ports:
+      - "5002:5000"
+    env_file:
+      - ./config/api_mysql_test.env
+    networks:
+      - druna_net
+    restart: on-failure
+
+  #### Serviços locais
+
+  API_SQL_LOCAL:
+    image: api_mysql:local
+    depends_on:
+      DB:
+        condition: service_healthy
+        restart: true
+    volumes:
+      - ./api_mysql/:/app/
+    ports:
+      - "5004:5000"
+    env_file:
+      - ./config/api_mysql_local.env
+    networks:
+      - druna_net
+    restart: on-failure
+
+  DB:
+    image: mysql_db:local
+    ports:
+      - "3306:3306"
+    env_file:
+      - ./config/db.env
+    networks:
+      - druna_net
+    healthcheck:
+      test: ["CMD", "mysql","-u","drunagor_dev","-p12345", "-h","localhost", "drunagor_teste"]
+      timeout: 5s
+      retries: 10
+    command: --secure-file-priv=""
+    # restart: always
+    restart: on-failure
+
+    
+
+
+networks:
+  druna_net:
+    driver: bridge
