@@ -1,34 +1,37 @@
 from flask_restx import Namespace, Resource, fields
 from models.users import UserModel
 
+# Namespace da feature de usuários (define o prefixo e a descrição)
 user = Namespace("Users", "User related endpoints")
 
-# Model for documentation
+# Modelo de serialização/validação do usuário (entra/saí da API)
 user_model = user.model(
     "User",
     {
-        "users_pk": fields.Integer(readonly=True),
-        "name": fields.String(required=True),
-        "email": fields.String(required=True),
+        "users_pk": fields.Integer(readonly=True),  # PK só leitura
+        "name": fields.String(required=True),  # nome obrigatório
+        "email": fields.String(required=True),  # email obrigatório
     },
 )
 
 
 @user.route("/")
 class UserList(Resource):
+    # GET /Users/ -> listo todos os usuários
     @user.marshal_list_with(user_model)
     def get(self):
-        """Get all users"""
         return UserModel.query.all()
 
-    @user.expect(user_model)
-    @user.marshal_with(user_model, code=201)
+    # POST /Users/ -> crio um novo usuário
+    @user.expect(user_model)  # espero payload conforme o modelo
+    @user.marshal_with(user_model, code=201)  # retorno o usuário criado
     def post(self):
-        """Create a new user"""
-        data = user.payload
+        data = user.payload  # pego o JSON enviado
+        # se o email já existir, impeço duplicidade
         if UserModel.find_by_email(data["email"]):
             user.abort(400, "Email already exists")
 
+        # crio e salvo o novo registro
         new_user = UserModel(name=data["name"], email=data["email"])
         new_user.save_user()
         return new_user, 201
@@ -36,33 +39,33 @@ class UserList(Resource):
 
 @user.route("/<int:users_pk>")
 class User(Resource):
+    # GET /Users/<id> -> busco um usuário específico
     @user.marshal_with(user_model)
     def get(self, users_pk):
-        """Get user by ID"""
         user_obj = UserModel.find_user(users_pk)
         if not user_obj:
-            user.abort(404, "User not found")
+            user.abort(404, "User not found")  # retorno 404 se não existir
         return user_obj
 
-    @user.expect(user_model)
-    @user.marshal_with(user_model)
+    # PUT /Users/<id> -> atualizo um usuário existente
+    @user.expect(user_model)  # recebo os campos do modelo
+    @user.marshal_with(user_model)  # devolvo o usuário atualizado
     def put(self, users_pk):
-        """Update user"""
         user_obj = UserModel.find_user(users_pk)
         if not user_obj:
             user.abort(404, "User not found")
 
         data = user.payload
-        # Check if email is being changed and if it's unique
+        # se email mudou, valido duplicidade antes de atualizar
         if "email" in data and data["email"] != user_obj.email:
             if UserModel.find_by_email(data["email"]):
                 user.abort(400, "Email already exists")
 
-        user_obj.update_user(**data)
+        user_obj.update_user(**data)  # atualizo só o que veio preenchido
         return user_obj
 
+    # DELETE /Users/<id> -> removo o usuário
     def delete(self, users_pk):
-        """Delete user"""
         user_obj = UserModel.find_user(users_pk)
         if not user_obj:
             user.abort(404, "User not found")

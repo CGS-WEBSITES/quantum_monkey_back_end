@@ -7,15 +7,48 @@ from models.users import UserModel
 
 config = Config(signature_version="s3v4")
 
+
+def send(recipient, subject, body):
+    sender = "no-reply@drunagor.app"
+
+    ses_client = boto3.client(
+        "ses",
+        region_name=str(AWS_REGION),
+        aws_access_key_id=str(AWS_ACCESS_KEY_ID),
+        aws_secret_access_key=str(AWS_SECRET_ACCESS_KEY),
+    )
+
+    mensagem = {
+        "Subject": {"Data": subject},
+        "Body": {"Html": {"Data": body}},
+    }
+
+    try:
+        response = ses_client.send_email(
+            Source=sender,
+            Destination={"ToAddresses": [recipient]},
+            Message=mensagem,
+        )
+        return {"message": "Email sent successfully", "response": response}
+    except ClientError as e:
+        error_message = e.response["Error"]["Message"]
+        print(f"Error sending email: {error_message}")
+        return {"error": error_message}, 500
+
+
 def send_store_verification_email(store_data):
     recipient = "james@wearecgs.com"
     sender = "store-verify@drunagor.app"
-    subject = f"New Store for Verification: {store_data.get('name', 'ID: ' + str(store_data.get('pk')))}"
+    subject = f"New Store for Verification: {
+        store_data.get('name', 'ID: ' + str(store_data.get('pk')))
+    }"
 
-    verification_link = f"{API_BASE_URL}/stores/{store_data.get('stores_pk')}/verify"
+    verification_link = f"{API_BASE_URL}/stores/{store_data.get(
+        'stores_pk'
+    )}/verify"
     denial_link = f"{API_BASE_URL}/stores/{store_data.get('stores_pk')}/deny"
 
-    user_id = store_data.get('users_fk')
+    user_id = store_data.get("users_fk")
     user_data = None
     if user_id:
         user_object = UserModel.find_user(user_id)
@@ -26,12 +59,32 @@ def send_store_verification_email(store_data):
     if user_data:
         user_details_html = f"""
             <tr>
-                <td style="padding: 25px 30px; background-color: #2c585c; border-radius: 8px; margin-bottom: 20px;">
-                    <h2 style="margin-top: 0; margin-bottom: 15px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 20px; color: #FB8C00;">Owner Details</h2>
-                    <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>Name:</strong> {user_data.get('name', 'Not provided')}</p>
-                    <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>User Name:</strong> {user_data.get('user_name', 'Not provided')}</p>
-                    <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>Email:</strong> {user_data.get('email', 'Not provided')}</p>
-                    <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>Join Date:</strong> {user_data.get('join_date', 'Not provided')}</p>
+                <td style="padding: 25px 30px; background-color: #2c585c;
+                    border-radius: 8px; margin-bottom: 20px;">
+                    <h2 style="margin-top: 0; margin-bottom: 15px; font-family:
+                        'Helvetica Neue', Helvetica, Arial, sans-serif;
+                            font-size: 20px; color: #FB8C00;">Owner Details
+                    </h2>
+                    <p style="margin: 4px 0; font-size: 16px; color: #ffffff;">
+                        <strong>Name:</strong> {user_data.get(
+                            "name", "Not provided"
+                        )}
+                    </p>
+                    <p style="margin: 4px 0; font-size: 16px; color: #ffffff;">
+                        <strong>User Name:</strong> {user_data.get(
+                            "user_name", "Not provided"
+                        )}
+                    </p>
+                    <p style="margin: 4px 0; font-size: 16px; color: #ffffff;">
+                        <strong>Email:</strong> {user_data.get(
+                            "email", "Not provided"
+                        )}
+                    </p>
+                    <p style="margin: 4px 0; font-size: 16px; color: #ffffff;">
+                        <strong>Join Date:</strong> {user_data.get(
+                            "join_date", "Not provided"
+                        )}
+                    </p>
                 </td>
             </tr>
         """
@@ -44,18 +97,18 @@ def send_store_verification_email(store_data):
                 </td>
             </tr>
         """
-        
+
     store_details_html = f"""
         <tr>
             <td style="padding: 25px 30px; background-color: #2c585c; border-radius: 8px;">
                 <h2 style="margin-top: 0; margin-bottom: 15px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 20px; color: #FB8C00;">Store Details</h2>
-                <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>Store ID:</strong> {store_data.get('stores_pk')}</p>
-                <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>Name:</strong> {store_data.get('name', 'Not provided')}</p>
-                <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>Address:</strong> {store_data.get('address', 'Not provided')}</p>
-                <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>Zip Code:</strong> {store_data.get('zip_code', 'Not provided')}</p>
-                <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>State:</strong> {store_data.get('state', 'Not provided')}</p>
-                <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>Website:</strong> <a href="{store_data.get('web_site', '#')}" style="color: #4CAF50;">{store_data.get('web_site', 'Not provided')}</a></p>
-                <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>Picture Hash:</strong> {store_data.get('picture_hash', 'Not provided')}</p>
+                <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>Store ID:</strong> {store_data.get("stores_pk")}</p>
+                <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>Name:</strong> {store_data.get("name", "Not provided")}</p>
+                <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>Address:</strong> {store_data.get("address", "Not provided")}</p>
+                <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>Zip Code:</strong> {store_data.get("zip_code", "Not provided")}</p>
+                <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>State:</strong> {store_data.get("state", "Not provided")}</p>
+                <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>Website:</strong> <a href="{store_data.get("web_site", "#")}" style="color: #4CAF50;">{store_data.get("web_site", "Not provided")}</a></p>
+                <p style="margin: 4px 0; font-size: 16px; color: #ffffff;"><strong>Picture Hash:</strong> {store_data.get("picture_hash", "Not provided")}</p>
             </td>
         </tr>
     """
@@ -137,12 +190,15 @@ def send_store_verification_email(store_data):
         print(f"Error sending email: {e.response['Error']['Message']}")
         return None
 
+
 def send_store_denial_email(store_data):
-    user_id = store_data.get('users_fk')
+    user_id = store_data.get("users_fk")
     if not user_id:
-        print(f"Error: User FK not found for store {store_data.get('stores_pk')}. Cannot send denial email.")
+        print(
+            f"Error: User FK not found for store {store_data.get('stores_pk')}. Cannot send denial email."
+        )
         return None
-        
+
     user_object = UserModel.find_user(user_id)
     if not user_object:
         print(f"Error: User with ID {user_id} not found. Cannot send denial email.")
@@ -151,7 +207,7 @@ def send_store_denial_email(store_data):
     recipient = user_object.email
     sender = "no-reply@drunagor.app"
     subject = f"An update on your store submission: {store_data.get('name')}"
-    store_name = store_data.get('name')
+    store_name = store_data.get("name")
 
     ses_client = boto3.client(
         "ses",
@@ -198,6 +254,7 @@ def send_store_denial_email(store_data):
     except ClientError as e:
         print(f"Error sending denial email: {e.response['Error']['Message']}")
         return None
+
 
 def reset_password(recipient, subject, password):
     sender = "no-reply@drunagor.app"
