@@ -39,14 +39,17 @@ def send(recipient, subject, body):
 def send_store_verification_email(store_data):
     recipient = "james@wearecgs.com"
     sender = "store-verify@drunagor.app"
-    subject = f"New Store for Verification: {
-        store_data.get('name', 'ID: ' + str(store_data.get('pk')))
-    }"
 
-    verification_link = f"{API_BASE_URL}/stores/{store_data.get(
-        'stores_pk'
-    )}/verify"
-    denial_link = f"{API_BASE_URL}/stores/{store_data.get('stores_pk')}/deny"
+    # monta name/id sem quebrar linha dentro do f-string
+    name_or_id = (
+        store_data.get("name")
+        or f"ID: {store_data.get('pk') or store_data.get('stores_pk')}"
+    )
+    subject = f"New Store for Verification: {name_or_id}"
+
+    stores_pk = store_data.get("stores_pk")
+    verification_link = f"{API_BASE_URL}/stores/{stores_pk}/verify"
+    denial_link = f"{API_BASE_URL}/stores/{stores_pk}/deny"
 
     user_id = store_data.get("users_fk")
     user_data = None
@@ -55,7 +58,6 @@ def send_store_verification_email(store_data):
         if user_object:
             user_data = user_object.json()
 
-    user_details_html = ""
     if user_data:
         user_details_html = f"""
             <tr>
@@ -66,24 +68,16 @@ def send_store_verification_email(store_data):
                             font-size: 20px; color: #FB8C00;">Owner Details
                     </h2>
                     <p style="margin: 4px 0; font-size: 16px; color: #ffffff;">
-                        <strong>Name:</strong> {user_data.get(
-                            "name", "Not provided"
-                        )}
+                        <strong>Name:</strong> {user_data.get("name", "Not provided")}
                     </p>
                     <p style="margin: 4px 0; font-size: 16px; color: #ffffff;">
-                        <strong>User Name:</strong> {user_data.get(
-                            "user_name", "Not provided"
-                        )}
+                        <strong>User Name:</strong> {user_data.get("user_name", "Not provided")}
                     </p>
                     <p style="margin: 4px 0; font-size: 16px; color: #ffffff;">
-                        <strong>Email:</strong> {user_data.get(
-                            "email", "Not provided"
-                        )}
+                        <strong>Email:</strong> {user_data.get("email", "Not provided")}
                     </p>
                     <p style="margin: 4px 0; font-size: 16px; color: #ffffff;">
-                        <strong>Join Date:</strong> {user_data.get(
-                            "join_date", "Not provided"
-                        )}
+                        <strong>Join Date:</strong> {user_data.get("join_date", "Not provided")}
                     </p>
                 </td>
             </tr>
