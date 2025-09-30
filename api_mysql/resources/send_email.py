@@ -1,20 +1,20 @@
 from flask_restx import Resource, Namespace, reqparse, inputs
-from flask_jwt_extended import jwt_required
+
+# from flask_jwt_extended import jwt_required  # removido
 from email_sender import send
 from models.contacts import ContactModel
 
-sender = Namespace("Email Sender", "Email related Endpoints")
+sender = Namespace("Email Sender", description="Email related Endpoints")
 
 
 @sender.route("/send")
-class senderSend(Resource):
+class SenderSend(Resource):
     atributos = reqparse.RequestParser()
     atributos.add_argument("recipient", type=str, required=True, location="args")
     atributos.add_argument("subject", type=str, required=True, location="args")
     atributos.add_argument("body", type=str, required=True, location="args")
 
     @sender.expect(atributos, validate=True)
-    @jwt_required()
     def post(self):
         dados = self.atributos.parse_args()
         return send(dados["recipient"], dados["subject"], dados["body"])
@@ -35,7 +35,6 @@ class SenderSendToContacts(Resource):
     )
 
     @sender.expect(args, validate=True)
-    @jwt_required()
     def post(self):
         data = self.args.parse_args()
         subject = (data.get("subject") or "").strip()
@@ -43,7 +42,6 @@ class SenderSendToContacts(Resource):
         only_active = bool(data.get("only_active"))
         ids_param = (data.get("ids") or "").strip()
 
-        # Monta a query base
         query = ContactModel.query
         if ids_param:
             try:
@@ -66,7 +64,6 @@ class SenderSendToContacts(Resource):
 
         for c in contacts:
             resp = send(c.email, subject, body)
-            # 'send' pode retornar (payload, status) em erro
             if isinstance(resp, tuple):
                 payload, status = resp
                 if status and int(status) >= 400:
@@ -79,7 +76,6 @@ class SenderSendToContacts(Resource):
                 else:
                     results["sent"].append(c.email)
             else:
-                # sucesso
                 results["sent"].append(c.email)
 
         return {
