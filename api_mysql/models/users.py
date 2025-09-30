@@ -1,4 +1,5 @@
 from sql_alchemy import banco
+from sqlalchemy import Boolean, text
 
 
 # Modelo da tabela de usuários
@@ -11,11 +12,20 @@ class UserModel(banco.Model):
     name = banco.Column(banco.String(145), nullable=False)
     # Email único do usuário (obrigatório)
     email = banco.Column(banco.String(320), nullable=False, unique=True)
+    # Indica se o usuário está ativo (default True)
+    # server_default garante o default no banco; default garante no ORM
+    ativo = banco.Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("1"),  # MySQL/MariaDB: usa 1/0 para boolean
+    )
 
-    # Construtor: guardo nome e email
-    def __init__(self, name, email):
+    # Construtor: guardo nome, email e (opcionalmente) ativo
+    def __init__(self, name, email, ativo=True):
         self.name = name
         self.email = email
+        self.ativo = ativo
 
     # Transformo o objeto em dict para respostas JSON
     def json(self):
@@ -23,6 +33,7 @@ class UserModel(banco.Model):
             "users_pk": self.users_pk,
             "name": self.name,
             "email": self.email,
+            "ativo": self.ativo,
         }
 
     # Busco um usuário pela PK
