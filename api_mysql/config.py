@@ -12,6 +12,8 @@ AWS_SECRET_ACCESS_KEY = os.environ["AWS_SECRET_ACCESS_KEY"]
 GOOGLE_API_KEY = os.environ["GOOGLE_API_KEY"]
 API_BASE_URL = os.environ["API_BASE_URL"]
 
+S3_BUCKET_QMONKEY = os.environ.get("S3_BUCKET_QMONKEY", "qmonkey.drunagor.app")
+
 DATABASE_URI = (
     f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}?charset=utf8mb4"
 )
