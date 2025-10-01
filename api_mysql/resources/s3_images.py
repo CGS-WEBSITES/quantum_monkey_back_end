@@ -1,5 +1,4 @@
-# resources/s3_images.py
-from flask_restx import Namespace, Resource, reqparse
+from flask_restx import Namespace, Resource, fields
 from werkzeug.datastructures import FileStorage
 import boto3
 from botocore.exceptions import ClientError
@@ -13,17 +12,40 @@ from config import (
     S3_BUCKET_QMONKEY,
 )
 
-# Namespace da API para agrupar as rotas de assets.
-# (Eu centralizo tudo relacionado a S3 aqui em /assets)
-assets = Namespace("assets", description="S3 assets")
+# Namespace da API
+assets = Namespace("assets", description="S3 assets operations")
+
+# ---------- Modelos para documentação Swagger ----------
+image_list_model = assets.model(
+    "ImageList", {"items": fields.List(fields.String, description="List of image keys")}
+)
+
+upload_response_model = assets.model(
+    "UploadResponse",
+    {
+        "key": fields.String(description="S3 object key"),
+        "bucket": fields.String(description="S3 bucket name"),
+    },
+)
+
+error_model = assets.model(
+    "Error", {"message": fields.String(description="Error message")}
+)
+
+# ---------- Parser para upload ----------
+upload_parser = assets.parser()
+upload_parser.add_argument(
+    "input",
+    type=FileStorage,
+    location="files",
+    required=True,
+    help="PNG image file to upload (multipart/form-data)",
+)
 
 
 # ---------- S3 client factory ----------
 def s3_client():
-    """
-    Crio e retorno um cliente S3 configurado com minhas credenciais e região.
-    Faço isso numa função para reutilizar e manter o código limpo.
-    """
+    """Create and return a configured S3 client"""
     return boto3.client(
         "s3",
         region_name=str(AWS_REGION),
@@ -32,97 +54,84 @@ def s3_client():
     )
 
 
-# ---------- GET: list only image keys ----------
 @assets.route("/images")
 class Images(Resource):
+
+    @assets.doc("list_images")
+    @assets.marshal_with(image_list_model)
+    @assets.response(200, "Success", image_list_model)
+    @assets.response(500, "S3 Error", error_model)
     def get(self):
-        """
-        Lista SOMENTE os nomes (keys) das imagens existentes no bucket.
-        Não retorno metadados, só um array 'items' com as chaves.
-        - Eu filtro por extensões de imagem mais comuns.
-        """
+        """List all image keys from S3 bucket"""
         client = s3_client()
         paginator = client.get_paginator("list_objects_v2")
 
-        # Extensões que considero como imagem.
-        # (Se eu precisar, ajusto essa lista depois.)
+        # Extensões de imagem suportadas
         image_exts = {"png", "jpg", "jpeg", "webp", "gif", "svg"}
 
         keys = []
         try:
-            # Uso paginação para suportar muitos objetos no bucket.
+            # Paginação para suportar muitos objetos
             for page in paginator.paginate(Bucket=S3_BUCKET_QMONKEY):
-                # Se não houver 'Contents', o page pode não ter objetos.
                 for obj in page.get("Contents", []):
                     key = obj.get("Key")
 
-                    # Ignoro "pastas" virtuais (terminam com '/')
+                    # Ignora "pastas" virtuais
                     if key.endswith("/"):
                         continue
 
-                    # Filtro por extensão para garantir que só entro imagens.
+                    # Filtra por extensão de imagem
                     ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""
                     if ext in image_exts:
                         keys.append(key)
+
         except ClientError as e:
-            # Em caso de erro de permissão/rede, retorno 500 com a mensagem da AWS.
             msg = e.response.get("Error", {}).get("Message", str(e))
             assets.abort(500, f"S3 access error: {msg}")
 
-        # Ordeno para ter uma saída estável/alfabética.
         keys.sort()
         return {"items": keys}, 200
 
-    # ---------- POST: upload PNG only (single 'file' field) ----------
+    @assets.doc("upload_image")
+    @assets.expect(upload_parser)
+    @assets.marshal_with(upload_response_model, code=201)
+    @assets.response(201, "Upload successful", upload_response_model)
+    @assets.response(400, "Bad request", error_model)
+    @assets.response(500, "S3 Error", error_model)
     def post(self):
-        """
-        Faz upload de uma imagem PNG para o bucket.
-        Regras que eu defini:
-        - Só aceito um único campo 'file' no multipart/form-data.
-        - A ÚNICA validação é: o Content-Type precisa ser 'image/png'.
-        - Se o nome do arquivo vier vazio ou sem .png, eu gero um UUID .png.
-        Retorno a 'key' gravada e o 'bucket' alvo.
-        """
-        parser = reqparse.RequestParser()
-        parser.add_argument(
-            "file",
-            type=FileStorage,
-            location="files",
-            required=True,
-            help="PNG file to upload (multipart/form-data, field name: file)",
-        )
-        args = parser.parse_args()
-        file: FileStorage = args["file"]
+        """Upload a PNG image to S3 bucket"""
+        args = upload_parser.parse_args()
+        file = args["input"]
 
-        # Validação mínima pedida: confiro o MIME type informado.
-        # (Se o cliente mentir no MIME, eu não bloqueio — essa foi a regra solicitada:
-        # a única validação é Content-Type = image/png.)
+        # Validação do tipo MIME
+        if not file:
+            assets.abort(400, "No file provided")
+
         if (file.mimetype or "").lower() != "image/png":
-            assets.abort(400, "Only PNG is allowed (Content-Type must be image/png).")
+            assets.abort(400, "Only PNG is allowed (Content-Type must be image/png)")
 
-        # Se o filename não existir ou não terminar com .png,
-        # eu forço um nome seguro via UUID.
+        # Define o nome do arquivo
         filename = (file.filename or "").strip()
         if not filename or not filename.lower().endswith(".png"):
             filename = f"{uuid4().hex}.png"
 
-        # Leio o arquivo para memória e preparo um stream para o upload.
+        # Lê o arquivo para memória
         try:
             raw = file.read()
             if not raw:
-                assets.abort(400, "Empty file.")
+                assets.abort(400, "Empty file")
             stream = BytesIO(raw)
         finally:
-            # Por boa prática, tento reposicionar o ponteiro,
-            # mesmo que não seja estritamente necessário após read().
+            # Reposiciona o ponteiro
             try:
                 file.stream.seek(0)
             except Exception:
                 pass
 
-        # Subo sempre na raiz do bucket (sem prefixo).
+        # Define a chave no S3
         key = filename
 
+        # Upload para o S3
         client = s3_client()
         try:
             client.upload_fileobj(
@@ -130,14 +139,61 @@ class Images(Resource):
                 Bucket=S3_BUCKET_QMONKEY,
                 Key=key,
                 ExtraArgs={
-                    # Gravo o Content-Type correto no S3.
                     "ContentType": "image/png",
+                    # Opcional: tornar público
+                    # "ACL": "public-read"
                 },
             )
         except ClientError as e:
-            # Se algo falhar na AWS (permite, credencial, rede etc.), retorno 500.
             msg = e.response.get("Error", {}).get("Message", str(e))
             assets.abort(500, f"S3 upload error: {msg}")
 
-        # Retorno o caminho gravado e o bucket para o cliente confirmar.
         return {"key": key, "bucket": S3_BUCKET_QMONKEY}, 201
+
+
+# ---------- Rota adicional para obter URL de um objeto ----------
+@assets.route("/images/<string:key>")
+@assets.param("key", "The S3 object key")
+class ImageDetail(Resource):
+
+    @assets.doc("get_image_url")
+    @assets.response(200, "Success")
+    @assets.response(404, "Image not found")
+    def get(self, key):
+        """Get presigned URL for a specific image"""
+        client = s3_client()
+
+        try:
+            # Verifica se o objeto existe
+            client.head_object(Bucket=S3_BUCKET_QMONKEY, Key=key)
+
+            # Gera URL pré-assinada (válida por 1 hora)
+            url = client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": S3_BUCKET_QMONKEY, "Key": key},
+                ExpiresIn=3600,
+            )
+
+            return {"url": url, "key": key, "expires_in": 3600}, 200
+
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "404":
+                assets.abort(404, f"Image not found: {key}")
+            else:
+                msg = e.response.get("Error", {}).get("Message", str(e))
+                assets.abort(500, f"S3 error: {msg}")
+
+    @assets.doc("delete_image")
+    @assets.response(204, "Deleted successfully")
+    @assets.response(404, "Image not found")
+    def delete(self, key):
+        """Delete an image from S3"""
+        client = s3_client()
+
+        try:
+            client.delete_object(Bucket=S3_BUCKET_QMONKEY, Key=key)
+            return "", 204
+
+        except ClientError as e:
+            msg = e.response.get("Error", {}).get("Message", str(e))
+            assets.abort(500, f"S3 delete error: {msg}")
