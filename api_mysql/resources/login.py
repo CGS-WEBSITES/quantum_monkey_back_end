@@ -2,19 +2,22 @@ from flask_restx import Namespace, Resource, fields
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from models.users import UserModel
 
-auth = Namespace("Auth", "Authentication endpoints")
+# Namespace de login
+login = Namespace("Login", "Login and authentication endpoints")
 
 # Modelos da API
-register_model = auth.model(
-    "Register",
+create_login_model = login.model(
+    "CreateLogin",
     {
         "name": fields.String(required=True, description="Nome do usuário"),
         "email": fields.String(required=True, description="Email do usuário"),
-        "password": fields.String(required=True, description="Senha do usuário (mínimo 6 caracteres)"),
+        "password": fields.String(
+            required=True, description="Senha do usuário (mínimo 6 caracteres)"
+        ),
     },
 )
 
-login_model = auth.model(
+login_model = login.model(
     "Login",
     {
         "email": fields.String(required=True, description="Email do usuário"),
@@ -22,7 +25,7 @@ login_model = auth.model(
     },
 )
 
-token_response = auth.model(
+token_response = login.model(
     "TokenResponse",
     {
         "access_token": fields.String(description="JWT Access Token"),
@@ -31,25 +34,25 @@ token_response = auth.model(
 )
 
 
-@auth.route("/register")
-class Register(Resource):
-    @auth.expect(register_model)
-    @auth.marshal_with(token_response, code=201)
+@login.route("/create")
+class CreateLogin(Resource):
+    @login.expect(create_login_model)
+    @login.marshal_with(token_response, code=201)
     def post(self):
-        """Registrar um novo usuário e retornar token JWT"""
-        data = auth.payload
+        """Criar um novo login (cadastro de usuário)"""
+        data = login.payload
 
         # Validações
         if not data.get("name") or not data.get("email") or not data.get("password"):
-            auth.abort(400, "Name, email and password are required")
+            login.abort(400, "Name, email and password are required")
 
         # Verificar se o email já existe
         if UserModel.find_by_email(data["email"]):
-            auth.abort(400, "Email already exists")
+            login.abort(400, "Email already exists")
 
         # Validar tamanho da senha
         if len(data["password"]) < 6:
-            auth.abort(400, "Password must be at least 6 characters long")
+            login.abort(400, "Password must be at least 6 characters long")
 
         # Criar novo usuário
         new_user = UserModel(
@@ -69,30 +72,30 @@ class Register(Resource):
         }, 201
 
 
-@auth.route("/login")
+@login.route("/")
 class Login(Resource):
-    @auth.expect(login_model)
-    @auth.marshal_with(token_response)
+    @login.expect(login_model)
+    @login.marshal_with(token_response)
     def post(self):
         """Fazer login e receber token JWT"""
-        data = auth.payload
+        data = login.payload
 
         # Validações
         if not data.get("email") or not data.get("password"):
-            auth.abort(400, "Email and password are required")
+            login.abort(400, "Email and password are required")
 
         # Buscar usuário por email
         user = UserModel.find_by_email(data["email"])
         if not user:
-            auth.abort(401, "Invalid email or password")
+            login.abort(401, "Invalid email or password")
 
         # Verificar se está ativo
         if not user.ativo:
-            auth.abort(403, "User account is inactive")
+            login.abort(403, "User account is inactive")
 
         # Verificar senha
         if not user.verify_password(data["password"]):
-            auth.abort(401, "Invalid email or password")
+            login.abort(401, "Invalid email or password")
 
         # Gerar token JWT
         access_token = create_access_token(identity=user.users_pk)
@@ -103,19 +106,19 @@ class Login(Resource):
         }
 
 
-@auth.route("/me")
+@login.route("/me")
 class Me(Resource):
     @jwt_required()
-    @auth.doc(security="apikey")
+    @login.doc(security="apikey")
     def get(self):
         """Obter informações do usuário autenticado"""
         current_user_id = get_jwt_identity()
         user = UserModel.find_user(current_user_id)
 
         if not user:
-            auth.abort(404, "User not found")
+            login.abort(404, "User not found")
 
         if not user.ativo:
-            auth.abort(403, "User account is inactive")
+            login.abort(403, "User account is inactive")
 
         return user.json()
