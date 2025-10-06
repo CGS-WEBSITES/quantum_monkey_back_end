@@ -1,53 +1,68 @@
 from sql_alchemy import banco
+from sqlalchemy import Boolean, text
+from bcryptInit import bcrypt  # Importar o bcrypt do seu arquivo
 
 
-# Modelo da tabela de usuários
 class UserModel(banco.Model):
     __tablename__ = "users"
 
-    # PK do usuário
     users_pk = banco.Column(banco.Integer, primary_key=True)
-    # Nome do usuário (obrigatório)
     name = banco.Column(banco.String(145), nullable=False)
-    # Email único do usuário (obrigatório)
     email = banco.Column(banco.String(320), nullable=False, unique=True)
+    password_hash = banco.Column(
+        banco.String(255), nullable=False
+    )  # NOVO: senha hasheada
+    ativo = banco.Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("1"),
+    )
 
-    # Construtor: guardo nome e email
-    def __init__(self, name, email):
+    def __init__(self, name, email, password=None, ativo=True):
         self.name = name
         self.email = email
+        if password:
+            self.password_hash = bcrypt.generate_password_hash(password).decode("utf-8")
+        self.ativo = ativo
 
-    # Transformo o objeto em dict para respostas JSON
     def json(self):
         return {
             "users_pk": self.users_pk,
             "name": self.name,
             "email": self.email,
+            "ativo": self.ativo,
         }
 
-    # Busco um usuário pela PK
+    def verify_password(self, password):
+        """Verifica se a senha está correta"""
+        return bcrypt.check_password_hash(self.password_hash, password)
+
+    def set_password(self, password):
+        """Atualiza a senha do usuário"""
+        self.password_hash = bcrypt.generate_password_hash(password).decode("utf-8")
+
     @classmethod
     def find_user(cls, users_pk):
         return cls.query.filter_by(users_pk=users_pk).first()
 
-    # Busco um usuário pelo email
     @classmethod
     def find_by_email(cls, email):
         return cls.query.filter_by(email=email).first()
 
-    # Salvo (insert/update) o usuário no banco
     def save_user(self):
         banco.session.add(self)
         banco.session.commit()
 
-    # Excluo o usuário do banco
     def delete_user(self):
         banco.session.delete(self)
         banco.session.commit()
 
-    # Atualizo apenas os campos enviados (não nulos) e já salvo
     def update_user(self, **kwargs):
         for key, value in kwargs.items():
             if value is not None:
-                setattr(self, key, value)
+                if key == "password":
+                    self.set_password(value)
+                else:
+                    setattr(self, key, value)
         self.save_user()
