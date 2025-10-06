@@ -28,18 +28,29 @@ class UserList(Resource):
     @user.marshal_with(user_model, code=201)  # retorno o usuário criado
     def post(self):
         data = user.payload or {}
-        # se o email já existir, impeço duplicidade
+
+        # Validações
         if "email" not in data or "name" not in data:
-            user.abort(400, "Field 'name' and 'email' are required")
+            user.abort(400, "Fields 'name' and 'email' are required")
+
+        if "password" not in data:  # NOVO: validar senha
+            user.abort(400, "Field 'password' is required")
 
         if UserModel.find_by_email(data["email"]):
             user.abort(400, "Email already exists")
 
-        # pega ativo do payload (se vier), senão True
+        if len(data["password"]) < 6:  # NOVO: validar tamanho
+            user.abort(400, "Password must be at least 6 characters long")
+
         ativo = data.get("ativo", True)
 
-        # crio e salvo o novo registro
-        new_user = UserModel(name=data["name"], email=data["email"], ativo=ativo)
+        # Criar usuário com senha
+        new_user = UserModel(
+            name=data["name"],
+            email=data["email"],
+            password=data["password"],  # NOVO
+            ativo=ativo,
+        )
         new_user.save_user()
         return new_user, 201
 
