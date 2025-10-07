@@ -34,7 +34,7 @@ services:
       - ./api_mysql/:/app/
       - ./db_populate/:/app/db_populate/
     ports:
-      - "5002:5000"
+      - "5007:5000"
     env_file:
       - ./config/api_mysql_test.env
     networks:

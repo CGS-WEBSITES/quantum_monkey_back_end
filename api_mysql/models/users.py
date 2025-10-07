@@ -1,4 +1,6 @@
 from sql_alchemy import banco
+from sqlalchemy import Boolean, text
+from bcryptInit import bcrypt  # Importar o bcrypt do seu arquivo
 
 
 class UserModel(banco.Model):
@@ -7,78 +9,60 @@ class UserModel(banco.Model):
     users_pk = banco.Column(banco.Integer, primary_key=True)
     name = banco.Column(banco.String(145), nullable=False)
     email = banco.Column(banco.String(320), nullable=False, unique=True)
-    password = banco.Column(banco.String(200), nullable=False)
-    active = banco.Column(banco.Boolean, nullable=False)
-    verified = banco.Column(banco.Boolean, nullable=False)
+    password_hash = banco.Column(
+        banco.String(255), nullable=False
+    )  # NOVO: senha hasheada
+    ativo = banco.Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("1"),
+    )
 
-    def __init__(
-        self,
-        name,
-        user_name,
-        email,
-        password,
-        active,
-        verified,
-    ) -> None:
-
+    def __init__(self, name, email, password=None, ativo=True):
         self.name = name
-        self.user_name = user_name
         self.email = email
-        self.password = password
-        self.active = active
-        self.verified = verified
+        if password:
+            self.password_hash = bcrypt.generate_password_hash(password).decode("utf-8")
+        self.ativo = ativo
 
     def json(self):
         return {
             "users_pk": self.users_pk,
             "name": self.name,
-            "user_name": self.user_name,
             "email": self.email,
-            "active": self.active,
-            "verified": self.verified,
+            "ativo": self.ativo,
         }
+
+    def verify_password(self, password):
+        """Verifica se a senha está correta"""
+        return bcrypt.check_password_hash(self.password_hash, password)
+
+    def set_password(self, password):
+        """Atualiza a senha do usuário"""
+        self.password_hash = bcrypt.generate_password_hash(password).decode("utf-8")
 
     @classmethod
     def find_user(cls, users_pk):
-        user = cls.query.filter_by(users_pk=users_pk).first()
-        if user:
-            return user
-        return None
-
-    @classmethod
-    def find_by_name(cls, name):
-        user = cls.query.filter_by(name=name).first()
-        if user:
-            return user
-        return None
+        return cls.query.filter_by(users_pk=users_pk).first()
 
     @classmethod
     def find_by_email(cls, email):
-        user = cls.query.filter_by(email=email).first()
-
-        if user:
-            return user
-
-        return None
-
-    def update_pwd(self, password):
-        self.password = password
-        self.save_user()
-
-    def update_user(self, **kwargs):
-        for key, value in kwargs.items():
-            if value is not None:
-                setattr(self, key, value)
-        self.save_user()
+        return cls.query.filter_by(email=email).first()
 
     def save_user(self):
         banco.session.add(self)
         banco.session.commit()
 
     def delete_user(self):
-        self.active = False
-        self.save_user()
-
-    def remove_user(self):
         banco.session.delete(self)
         banco.session.commit()
+
+    def update_user(self, **kwargs):
+        for key, value in kwargs.items():
+            if value is not None:
+                if key == "password":
+                    self.set_password(value)
+                else:
+                    setattr(self, key, value)
+        self.save_user()

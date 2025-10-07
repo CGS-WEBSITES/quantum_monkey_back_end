@@ -1,365 +1,94 @@
-import traceback
-from datetime import datetime
-from flask_restx import Resource, Namespace, reqparse, fields, marshal
+from flask_restx import Namespace, Resource, fields
 from models.users import UserModel
-from flask_jwt_extended import (
-    create_access_token,
-    get_jwt,
-    jwt_required,
+
+# Namespace da feature de usuários (define o prefixo e a descrição)
+user = Namespace("Users", "User related endpoints")
+
+# Modelo de serialização/validação do usuário (entra/saí da API)
+user_model = user.model(
+    "User",
+    {
+        "users_pk": fields.Integer(readonly=True),  # PK só leitura
+        "name": fields.String(required=True),  # nome obrigatório
+        "email": fields.String(required=True),  # email obrigatório
+        "ativo": fields.Boolean(required=False, default=True),  # default True
+    },
 )
-from bcryptInit import bcrypt
-from blacklist import BLACKLIST
-from sql_alchemy import MySQLConnection
-from math import ceil
-import hashlib
-from utils import random_password
-from datetime import datetime
-from pytz import timezone
-from email_sender import reset_password
 
 
-user = Namespace("Users", "User related Endpoints")
+@user.route("/")
+class UserList(Resource):
+    # GET /Users/ -> listo todos os usuários
+    @user.marshal_list_with(user_model)
+    def get(self):
+        return UserModel.query.all()
 
-
-@user.route("/cadastro")
-class UserRegister(Resource):
-
-    atributos = reqparse.RequestParser()
-    atributos.add_argument(
-        "name",
-        type=str,
-        required=True,
-    ),
-    atributos.add_argument(
-        "email",
-        type=str,
-        required=True,
-    ),
-    atributos.add_argument(
-        "password",
-        type=str,
-        required=True,
-    ),
-    atributos.add_argument("active", type=bool, required=True, default=True),
-    atributos.add_argument("verified", type=bool, required=True, default=False),
-
-    @user.expect(atributos, validate=True)
+    # POST /Users/ -> crio um novo usuário
+    @user.expect(user_model)  # espero payload conforme o modelo
+    @user.marshal_with(user_model, code=201)  # retorno o usuário criado
     def post(self):
-        dados = self.atributos.parse_args()
+        data = user.payload or {}
 
-        hash_md5 = hashlib.md5()
-        hash_md5.update(dados["password"].encode("utf-8"))
+        # Validações
+        if "email" not in data or "name" not in data:
+            user.abort(400, "Fields 'name' and 'email' are required")
 
-        dados["password"] = hash_md5.hexdigest()
-        dados["password"] = bcrypt.generate_password_hash(dados["password"]).decode(
-            "UTF-8"
+        if "password" not in data:  # NOVO: validar senha
+            user.abort(400, "Field 'password' is required")
+
+        if UserModel.find_by_email(data["email"]):
+            user.abort(400, "Email already exists")
+
+        if len(data["password"]) < 6:  # NOVO: validar tamanho
+            user.abort(400, "Password must be at least 6 characters long")
+
+        ativo = data.get("ativo", True)
+
+        # Criar usuário com senha
+        new_user = UserModel(
+            name=data["name"],
+            email=data["email"],
+            password=data["password"],  # NOVO
+            ativo=ativo,
         )
-
-        if not dados["email"] or dados["email"] is None:
-            return {"message": "The field 'email' cannot be left blank."}, 400
-
-        if UserModel.find_by_email(dados["email"]):
-            return (
-                {"message": "The email '{}' already exists.".format(dados["email"])},
-                400,
-            )
-        
-        user = UserModel(**dados)
-
-        try:
-            user.save_user()
-
-
-        except:
-            user.delete_user()
-            traceback.print_exc()
-            return {"message": "Internal server error"}, 500
-
-        return {
-            "message": "User successfully created!",
-            "user": user.json(),
-        }, 201  # Created
-
-
-@user.route("/login")
-class UserLogin(Resource):
-
-    atributos = reqparse.RequestParser()
-    atributos.add_argument(
-        "email",
-        type=str,
-        required=True,
-    )
-    atributos.add_argument(
-        "password",
-        type=str,
-        required=True,
-    )
-
-    @classmethod
-    @user.expect(atributos, validate=True)
-    def post(cls):
-        dados = cls.atributos.parse_args()
-        user = UserModel.find_by_email(dados["email"])
-
-        try:
-            if user and bcrypt.check_password_hash(user.password, dados["password"]):
-                access_token = create_access_token(identity=user.users_pk)
-                if not user.active:
-                    return {"message": "Not Authorized."}, 403
-
-                elif not user.verified:
-                    return {
-                        "message": "The user has been verified.",
-                        "data": user.json(),
-                        "access_token": access_token,
-                    }, 403
-
-                else:
-                    return {
-                        "message": "User successfully logged in.",
-                        "data": user.json(),
-                        "access_token": access_token,
-                    }, 200
-
-            return {"message": "Incorrect password or login"}, 403
-        except:
-            return {"message": "Internal server error."}, 500
-
-
-@user.route("/logout")
-class UserLogout(Resource):
-    @jwt_required()
-    def post(self):
-        jwt_id = get_jwt()["jti"]  # JWT Token Identifier
-        BLACKLIST.add(jwt_id)
-        try:
-            return {"message": "Logged out successfuly!"}, 200
-        except:
-            return {"message": "Um erro interno ocorreu"}, 500
-
-
-@user.route("/alter")
-class UserAlter(Resource):
-
-    atributos = reqparse.RequestParser()
-    atributos.add_argument(
-        "users_pk",
-        type=int,
-        required=True,
-    ),
-    atributos.add_argument(
-        "name",
-        type=str,
-        required=False,
-    ),
-    atributos.add_argument(
-        "password",
-        type=str,
-        required=False,
-    ),
-    atributos.add_argument(
-        "email",
-        type=str,
-        required=False,
-    ),
-
-
-    @jwt_required()
-    @user.expect(atributos, validate=True)
-    def put(self):
-        kwargs = self.atributos.parse_args()
-
-        if kwargs["user_name"]:
-            user = UserModel.find_by_user_name(kwargs["user_name"])
-            if user:
-                {"message": "Username already in use."}, 401
-
-        if kwargs["email"]:
-            user = UserModel.find_by_email(kwargs["email"])
-            if user:
-                {"message": "Email already registered."}, 401
-
-        user = UserModel.find_user(kwargs["users_pk"])
-
-        if kwargs["password"]:
-            hash_md5 = hashlib.md5()
-            hash_md5.update(kwargs["password"].encode("utf-8"))
-
-            kwargs["password"] = hash_md5.hexdigest()
-            kwargs["password"] = bcrypt.generate_password_hash(
-                kwargs["password"]
-            ).decode("UTF-8")
-
-        if user:
-
-            try:
-                user.update_user(**kwargs)
-
-                return {
-                    "message": "User has been altered successfully.",
-                    "data": user.json(),
-                }, 200
-
-            except:
-                traceback.print_exc()
-                return {"message": "Internal server error"}, 500
-
-        return {"message": "User not found."}, 404
+        new_user.save_user()
+        return new_user, 201
 
 
 @user.route("/<int:users_pk>")
-class UserGet(Resource):
-
-    @jwt_required()
+class User(Resource):
+    # GET /Users/<id> -> busco um usuário específico
+    @user.marshal_with(user_model)
     def get(self, users_pk):
-        user = UserModel.find_user(users_pk)
+        user_obj = UserModel.find_user(users_pk)
+        if not user_obj:
+            user.abort(404, "User not found")  # retorno 404 se não existir
+        return user_obj
 
-        if user:
-            return user.json(), 200
-
-        return {"message": "Usuário não encontrado."}, 404  # not found
-
-
-@user.route("/<int:users_pk>/delete/")
-class UserDelete(Resource):
-
-    @jwt_required()
-    def delete(self, users_pk):
-        # try:
-        user = UserModel.find_user(users_pk)
-        if user:
-            user.delete_user()
-            return {"message": "User successfully deleted"}, 200
-        return {"message": "User not found."}, 404
-
-        # except:
-        #     return {"message": "Internal server error"}, 500
-
-
-@user.route("/<int:users_pk>/change_email/")
-class UserChangeEmail(Resource):
-    atributos = reqparse.RequestParser()
-    atributos.add_argument(
-        "email",
-        type=str,
-        required=True,
-    ),
-
-    @jwt_required()
-    @user.expect(atributos, validate=True)
+    # PUT /Users/<id> -> atualizo um usuário existente
+    @user.expect(user_model)  # recebo os campos do modelo
+    @user.marshal_with(user_model)  # devolvo o usuário atualizado
     def put(self, users_pk):
-        user = UserModel.find_user(users_pk)
-        if user:
-            kwargs = self.atributos.parse_args()
-            try:
-                user.update_user(**kwargs)
+        user_obj = UserModel.find_user(users_pk)
+        if not user_obj:
+            user.abort(404, "User not found")
 
-                return user.json(), 200
+        data = user.payload or {}
 
-            except:
-                traceback.print_exc()
-                return {"message": "Internal server error"}, 500
+        # se email mudou, valido duplicidade antes de atualizar
+        if "email" in data and data["email"] != user_obj.email:
+            if UserModel.find_by_email(data["email"]):
+                user.abort(400, "Email already exists")
 
-        return {"message": "User not found."}, 404
+        # atualizo só o que veio preenchido
+        user_obj.update_user(**data)
+        return user_obj
 
+    # DELETE /Users/<id> -> removo o usuário
+    def delete(self, users_pk):
+        user_obj = UserModel.find_user(users_pk)
+        if not user_obj:
+            user.abort(404, "User not found")
 
-@user.route("/alter_password")
-class ChagePassword(Resource):
-    atributos = user.parser()
-    atributos.add_argument(
-        "email",
-        type=str,
-        required=True,
-        help="User email",
-    )
-    atributos.add_argument(
-        "password",
-        type=str,
-        required=True,
-        help="New password",
-    )
-
-    @jwt_required()
-    @user.expect(atributos)
-    def post(self):
-        dados = self.atributos.parse_args()
-        user = UserModel.find_by_email(dados.email)
-        if not user:
-            return {"message": "User with email {} not found.".format(dados.email)}, 404
-
-        try:
-            user.update_user(dados)
-            return (
-                {
-                    "message": "Password altered successfully",
-                },
-                200,
-            )
-        except:
-            return (
-                {"message": "Internal server error."},
-                500,
-            )
-
-
-@user.route("/reset_password")
-class ChagePasswordRequisition(Resource):
-    atributos = user.parser()
-    atributos.add_argument(
-        "email",
-        type=str,
-        required=True,
-        help="The email field cannot be left blank",
-    )
-
-    @classmethod
-    @user.expect(atributos)
-    @user.doc(responses={200: "E-mail sent successfully."})
-    @user.doc(responses={404: "User not found."})
-    @user.doc(responses={500: "Internal server error."})
-    def post(cls):
-        dados = cls.atributos.parse_args()
-        user = UserModel.find_by_email(dados.email)
-        password = random_password()
-
-        hash_md5 = hashlib.md5()
-        hash_md5.update(password.encode("utf-8"))
-
-        enc_pswd = hash_md5.hexdigest()
-        enc_pswd = bcrypt.generate_password_hash(enc_pswd).decode("UTF-8")
-
-        if not user:
-            return {
-                "message": "User with mail {} was not found.".format(dados.email)
-            }, 404
-
-        try:
-            response = reset_password(
-                dados.email, "Your Drunagor Account Password Has Been Reset", password
-            )
-
-            if response["ResponseMetadata"]["HTTPStatusCode"] == 200:
-
-                try:
-                    user.update_pwd(enc_pswd)
-
-                except:
-                    return (
-                        {"message": "Internal server error while saving user"},
-                        500,
-                    )
-
-        except:
-            return (
-                {"message": "Internal server error while sending email"},
-                500,
-            )
-
-        return (
-            {
-                "message": "The e-mail was sent successfully.",
-                "response": response,
-            },
-            200,
-        )
+        user_obj.delete_user()
+        return {"message": "User deleted successfully"}, 200
