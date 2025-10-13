@@ -38,9 +38,9 @@ authorizations = {
 
 api = Api(
     app,
-    title="API Drunagor Companion App",
+    title="API Quantum monkey ",
     version="1.0",
-    description="Api para implementação do Drunagor Companion App com Flask",
+    description="Api para implementação do Quantum monkey com Flask",
     authorizations=authorizations,
     security="apikey",
 )

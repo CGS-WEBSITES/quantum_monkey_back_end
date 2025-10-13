@@ -1,6 +1,6 @@
-CREATE DATABASE  IF NOT EXISTS `drunagor_teste`;
+CREATE DATABASE  IF NOT EXISTS `qmonkey_test`;
 
-CREATE USER IF NOT EXISTS 'drunagor_dev'@'%' IDENTIFIED BY '12345';
+CREATE USER IF NOT EXISTS 'qmonkey_dev'@'%' IDENTIFIED BY '12345';
 
-GRANT ALL PRIVILEGES ON drunagor_teste.* TO 'drunagor_dev'@'%';
+GRANT ALL PRIVILEGES ON qmonkey_teste.* TO 'qmonkey_dev'@'%';
 

@@ -9,38 +9,37 @@ class UserModel(banco.Model):
     users_pk = banco.Column(banco.Integer, primary_key=True)
     name = banco.Column(banco.String(145), nullable=False)
     email = banco.Column(banco.String(320), nullable=False, unique=True)
-    password_hash = banco.Column(
+    password = banco.Column(
         banco.String(255), nullable=False
     )  # NOVO: senha hasheada
-    ativo = banco.Column(
+    active = banco.Column(
         Boolean,
         nullable=False,
         default=True,
-        server_default=text("1"),
     )
 
-    def __init__(self, name, email, password=None, ativo=True):
+    def __init__(self, name, email, password=None, active=True):
         self.name = name
         self.email = email
         if password:
-            self.password_hash = bcrypt.generate_password_hash(password).decode("utf-8")
-        self.ativo = ativo
+            self.password = bcrypt.generate_password_hash(password).decode("utf-8")
+        self.active = active
 
     def json(self):
         return {
             "users_pk": self.users_pk,
             "name": self.name,
             "email": self.email,
-            "ativo": self.ativo,
+            "active": self.active,
         }
 
     def verify_password(self, password):
         """Verifica se a senha está correta"""
-        return bcrypt.check_password_hash(self.password_hash, password)
+        return bcrypt.check_password_hash(self.password, password)
 
     def set_password(self, password):
         """Atualiza a senha do usuário"""
-        self.password_hash = bcrypt.generate_password_hash(password).decode("utf-8")
+        self.password = bcrypt.generate_password_hash(password).decode("utf-8")
 
     @classmethod
     def find_user(cls, users_pk):

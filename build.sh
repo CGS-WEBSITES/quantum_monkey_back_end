@@ -9,78 +9,51 @@ eval set -- "$VALID_ARGS"
 while [ : ]; do
     case "$1" in
     -p | --production)
-        echo " -----> CGS-DRUNAGOR DOCKER <----- "
+        echo " -----> CGS-QUANTUM MONKEY DOCKER <----- "
         echo
 
         echo "  ---> Building Flask MySQL Production Container"
         echo
 
-        docker build ./api_mysql/ -t api_mysql:prod
-
-        #############################################
-
-        echo "  ---> Building NGINX Container"
-        echo
-
-        docker build ./nginx/ -t nginx_px
+        docker --debug build ./api_mysql/ -t api_qmonkey:prod 
 
         shift
         ;;
     -t | --test)
 
-        echo " -----> CGS-DRUNAGOR DOCKER <----- "
+        echo " -----> CGS-QUANTUM MONKEY DOCKER <----- "
         echo
 
         echo "  ---> Building Flask MySQL Test Container"
         echo
 
-        docker build ./api_mysql/ -t api_mysql:test
-
-        #############################################
-
-        echo "  ---> Building NGINX Container"
-        echo
-
-        docker build ./nginx/ -t nginx_px
+        docker --debug build ./api_mysql/ -t api_qmonkey:test
 
         shift
         ;;
     -a | --all)
 
-        echo " -----> CGS-DRUNAGOR DOCKER <----- "
+        echo " -----> CGS-QUANTUM MONKEY DOCKER <----- "
         echo
 
         echo "  ---> Building Flask MySQL Production Container"
         echo
 
-        docker build ./api_mysql/ -t api_mysql:prod
+        docker build ./api_mysql/ -t api_qmonkey:prod
 
-        #############################################
-
-        echo "  ---> Building Flask MySQL Test Container"
-        echo
-
-        docker build ./api_mysql/ -t api_mysql:test
-
-        #############################################
-
-        echo "  ---> Building NGINX Container"
-        echo
-
-        docker build ./nginx/ -t nginx_px
 
         shift
         ;;
 
     -l | --local)
 
-        echo " -----> CGS-DRUNAGOR DOCKER <----- "
+        echo " -----> CGS-QUANTUM MONKEY DOCKER <----- "
         echo
 
         echo "  ---> Building Flask MySQL Local Container"
         echo
 
-        docker build ./api_mysql/ -t api_mysql:local
+        docker build ./api_mysql/ -t api_qmonkey:local
 
         #############################################
 
@@ -88,13 +61,6 @@ while [ : ]; do
         echo
 
         docker build ./mysql/ -t mysql_db:local
-
-        #############################################
-
-        echo "  ---> Building NGINX Container"
-        echo
-
-        docker build ./nginx/ -t nginx_px
 
         shift
         ;;
