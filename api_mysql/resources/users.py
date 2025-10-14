@@ -46,23 +46,6 @@ class UserRegister(Resource):
     def post(self):
         dados = self.atributos.parse_args()
 
-        hash_md5 = hashlib.md5()
-        hash_md5.update(dados["password"].encode("utf-8"))
-
-        dados["password"] = hash_md5.hexdigest()
-        dados["password"] = bcrypt.generate_password_hash(dados["password"]).decode(
-            "UTF-8"
-        )
-
-        if not dados["email"] or dados["email"] is None:
-            return {"message": "The field 'email' cannot be left blank."}, 400
-
-        if UserModel.find_by_email(dados["email"]):
-            return (
-                {"message": "The email '{}' already exists.".format(dados["email"])},
-                400,
-            )
-
         user = UserModel(**dados)
 
         try:
@@ -115,7 +98,7 @@ class UserLogin(Resource):
                 }, 200
 
         return {"message": "Incorrect password or login"}, 403
-    
+
         # except:
         #     return {"message": "Internal server error."}, 500
 
@@ -146,7 +129,7 @@ class UserAlter(Resource):
         type=str,
         required=False,
     ),
-    
+
     @jwt_required()
     @user.expect(atributos, validate=True)
     def put(self):
@@ -239,7 +222,7 @@ class UserChangeEmail(Resource):
                 return {"message": "Internal server error"}, 500
 
         return {"message": "User not found."}, 404
-    
+
 
 @user.route("/alter_password")
 class ChagePassword(Resource):
