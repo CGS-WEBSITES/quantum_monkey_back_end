@@ -29,18 +29,18 @@ class UserRegister(Resource):
         "name",
         type=str,
         required=True,
-    ),
+    )
     atributos.add_argument(
         "email",
         type=str,
         required=True,
-    ),
+    )
     atributos.add_argument(
         "password",
         type=str,
         required=True,
-    ),
-    atributos.add_argument("active", type=bool, required=False, default=True),
+    )
+    atributos.add_argument("active", type=bool, required=False, default=True)
 
     @user.expect(atributos, validate=True)
     def post(self):
@@ -123,12 +123,12 @@ class UserAlter(Resource):
         "name",
         type=str,
         required=False,
-    ),
+    )
     atributos.add_argument(
         "email",
         type=str,
         required=False,
-    ),
+    )
 
     @jwt_required()
     @user.expect(atributos, validate=True)
@@ -138,7 +138,7 @@ class UserAlter(Resource):
         if kwargs["email"]:
             user = UserModel.find_by_email(kwargs["email"])
             if user:
-                {"message": "Email already registered."}, 401
+                return {"message": "Email already registered."}, 401
 
         user = UserModel.find_user(kwargs["users_pk"])
 
@@ -204,7 +204,7 @@ class UserChangeEmail(Resource):
         "email",
         type=str,
         required=True,
-    ),
+    )
 
     @jwt_required()
     @user.expect(atributos, validate=True)
