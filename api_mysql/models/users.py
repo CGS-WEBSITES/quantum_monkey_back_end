@@ -1,6 +1,6 @@
 from sql_alchemy import banco
 from sqlalchemy import Boolean, text
-from bcryptInit import bcrypt  # Importar o bcrypt do seu arquivo
+from bcryptInit import bcrypt
 
 
 class UserModel(banco.Model):
@@ -11,7 +11,7 @@ class UserModel(banco.Model):
     email = banco.Column(banco.String(320), nullable=False, unique=True)
     password = banco.Column(
         banco.String(255), nullable=False
-    )  # NOVO: senha hasheada
+    ) 
     active = banco.Column(
         Boolean,
         nullable=False,
@@ -34,11 +34,9 @@ class UserModel(banco.Model):
         }
 
     def verify_password(self, password):
-        """Verifica se a senha está correta"""
         return bcrypt.check_password_hash(self.password, password)
 
     def set_password(self, password):
-        """Atualiza a senha do usuário"""
         self.password = bcrypt.generate_password_hash(password).decode("utf-8")
 
     @classmethod
