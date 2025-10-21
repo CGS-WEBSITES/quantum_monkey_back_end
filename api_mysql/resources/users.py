@@ -29,30 +29,27 @@ class UserRegister(Resource):
         "name",
         type=str,
         required=True,
-    ),
+    )
     atributos.add_argument(
         "email",
         type=str,
         required=True,
-    ),
+    )
     atributos.add_argument(
         "password",
         type=str,
         required=True,
-    ),
-    atributos.add_argument("active", type=bool, required=False, default=True),
+    )
+    atributos.add_argument(
+        "active",
+        type=bool,
+        required=False,
+        default=True,
+    )
 
     @user.expect(atributos, validate=True)
     def post(self):
         dados = self.atributos.parse_args()
-
-        hash_md5 = hashlib.md5()
-        hash_md5.update(dados["password"].encode("utf-8"))
-
-        dados["password"] = hash_md5.hexdigest()
-        dados["password"] = bcrypt.generate_password_hash(dados["password"]).decode(
-            "UTF-8"
-        )
 
         if not dados["email"] or dados["email"] is None:
             return {"message": "The field 'email' cannot be left blank."}, 400
@@ -100,7 +97,6 @@ class UserLogin(Resource):
         dados = cls.atributos.parse_args()
         user = UserModel.find_by_email(dados["login"])
 
-        # try:
         if user and bcrypt.check_password_hash(user.password, dados["password"]):
             access_token = create_access_token(identity=user.users_pk)
 
@@ -115,9 +111,6 @@ class UserLogin(Resource):
                 }, 200
 
         return {"message": "Incorrect password or login"}, 403
-    
-        # except:
-        #     return {"message": "Internal server error."}, 500
 
 
 @user.route("/logout")
@@ -140,13 +133,23 @@ class UserAlter(Resource):
         "name",
         type=str,
         required=False,
-    ),
+    )
     atributos.add_argument(
         "email",
         type=str,
         required=False,
-    ),
-    
+    )
+    atributos.add_argument(
+        "password",
+        type=str,
+        required=False,
+    )
+    atributos.add_argument(
+        "users_pk",
+        type=int,
+        required=True,
+    )
+
     @jwt_required()
     @user.expect(atributos, validate=True)
     def put(self):
@@ -154,22 +157,12 @@ class UserAlter(Resource):
 
         if kwargs["email"]:
             user = UserModel.find_by_email(kwargs["email"])
-            if user:
-                {"message": "Email already registered."}, 401
+            if user and user.users_pk != kwargs["users_pk"]:
+                return {"message": "Email already registered."}, 401
 
         user = UserModel.find_user(kwargs["users_pk"])
 
-        if kwargs["password"]:
-            hash_md5 = hashlib.md5()
-            hash_md5.update(kwargs["password"].encode("utf-8"))
-
-            kwargs["password"] = hash_md5.hexdigest()
-            kwargs["password"] = bcrypt.generate_password_hash(
-                kwargs["password"]
-            ).decode("UTF-8")
-
         if user:
-
             try:
                 user.update_user(**kwargs)
 
@@ -203,15 +196,11 @@ class UserDelete(Resource):
 
     @jwt_required()
     def delete(self, users_pk):
-        # try:
         user = UserModel.find_user(users_pk)
         if user:
             user.delete_user()
             return {"message": "User successfully deleted"}, 200
         return {"message": "User not found."}, 404
-
-        # except:
-        #     return {"message": "Internal server error"}, 500
 
 
 @user.route("/<int:users_pk>/change_email/")
@@ -221,7 +210,7 @@ class UserChangeEmail(Resource):
         "email",
         type=str,
         required=True,
-    ),
+    )
 
     @jwt_required()
     @user.expect(atributos, validate=True)
@@ -239,11 +228,11 @@ class UserChangeEmail(Resource):
                 return {"message": "Internal server error"}, 500
 
         return {"message": "User not found."}, 404
-    
+
 
 @user.route("/alter_password")
 class ChagePassword(Resource):
-    atributos = user.parser()
+    atributos = reqparse.RequestParser()
     atributos.add_argument(
         "email",
         type=str,
@@ -261,12 +250,14 @@ class ChagePassword(Resource):
     @user.expect(atributos)
     def post(self):
         dados = self.atributos.parse_args()
-        user = UserModel.find_by_email(dados.email)
+        user = UserModel.find_by_email(dados["email"])
         if not user:
-            return {"message": "User with email {} not found.".format(dados.email)}, 404
+            return {
+                "message": "User with email {} not found.".format(dados["email"])
+            }, 404
 
         try:
-            user.update_user(dados)
+            user.update_user(**dados)
             return (
                 {
                     "message": "Password altered successfully",
@@ -282,7 +273,7 @@ class ChagePassword(Resource):
 
 @user.route("/reset_password")
 class ChagePasswordRequisition(Resource):
-    atributos = user.parser()
+    atributos = reqparse.RequestParser()
     atributos.add_argument(
         "email",
         type=str,
@@ -297,28 +288,26 @@ class ChagePasswordRequisition(Resource):
     @user.doc(responses={500: "Internal server error."})
     def post(cls):
         dados = cls.atributos.parse_args()
-        user = UserModel.find_by_email(dados.email)
-        # password = random_password()
-        password = "12345"
+        user = UserModel.find_by_email(dados["email"])
+        password = "12345"  # ou random_password()
 
         hash_md5 = hashlib.md5()
         hash_md5.update(password.encode("utf-8"))
-
         enc_pswd = hash_md5.hexdigest()
-        enc_pswd = bcrypt.generate_password_hash(enc_pswd).decode("UTF-8")
 
         if not user:
             return {
-                "message": "User with mail {} was not found.".format(dados.email)
+                "message": "User with mail {} was not found.".format(dados["email"])
             }, 404
 
         try:
             response = reset_password(
-                dados.email, "Your Drunagor Account Password Has Been Reset", password
+                dados["email"],
+                "Your Drunagor Account Password Has Been Reset",
+                password,
             )
 
             if response["ResponseMetadata"]["HTTPStatusCode"] == 200:
-
                 try:
                     user.set_password(enc_pswd)
 
