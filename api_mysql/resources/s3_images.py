@@ -6,10 +6,10 @@ from uuid import uuid4
 from io import BytesIO
 
 from config import (
-    AWS_REGION,
-    AWS_ACCESS_KEY_ID,
-    AWS_SECRET_ACCESS_KEY,
-    S3_BUCKET_QMONKEY,
+    AWS_S3_REGION,
+    AWS_S3_ACCESS_KEY_ID,
+    AWS_S3_SECRET_ACCESS_KEY,
+    S3_BUCKET,
 )
 
 # Namespace da API
@@ -48,9 +48,9 @@ def s3_client():
     """Create and return a configured S3 client"""
     return boto3.client(
         "s3",
-        region_name=str(AWS_REGION),
-        aws_access_key_id=str(AWS_ACCESS_KEY_ID),
-        aws_secret_access_key=str(AWS_SECRET_ACCESS_KEY),
+        region_name=str(AWS_S3_REGION),
+        aws_access_key_id=str(AWS_S3_ACCESS_KEY_ID),
+        aws_secret_access_key=str(AWS_S3_SECRET_ACCESS_KEY),
     )
 
 
@@ -72,7 +72,7 @@ class Images(Resource):
         keys = []
         try:
             # Paginação para suportar muitos objetos
-            for page in paginator.paginate(Bucket=S3_BUCKET_QMONKEY):
+            for page in paginator.paginate(Bucket=S3_BUCKET):
                 for obj in page.get("Contents", []):
                     key = obj.get("Key")
 
@@ -136,7 +136,7 @@ class Images(Resource):
         try:
             client.upload_fileobj(
                 Fileobj=stream,
-                Bucket=S3_BUCKET_QMONKEY,
+                Bucket=S3_BUCKET,
                 Key=key,
                 ExtraArgs={
                     "ContentType": "image/png",
@@ -148,7 +148,7 @@ class Images(Resource):
             msg = e.response.get("Error", {}).get("Message", str(e))
             assets.abort(500, f"S3 upload error: {msg}")
 
-        return {"key": key, "bucket": S3_BUCKET_QMONKEY}, 201
+        return {"key": key, "bucket": S3_BUCKET}, 201
 
 
 # ---------- Rota adicional para obter URL de um objeto ----------
@@ -165,12 +165,12 @@ class ImageDetail(Resource):
 
         try:
             # Verifica se o objeto existe
-            client.head_object(Bucket=S3_BUCKET_QMONKEY, Key=key)
+            client.head_object(Bucket=S3_BUCKET, Key=key)
 
             # Gera URL pré-assinada (válida por 1 hora)
             url = client.generate_presigned_url(
                 "get_object",
-                Params={"Bucket": S3_BUCKET_QMONKEY, "Key": key},
+                Params={"Bucket": S3_BUCKET, "Key": key},
                 ExpiresIn=3600,
             )
 
@@ -191,7 +191,7 @@ class ImageDetail(Resource):
         client = s3_client()
 
         try:
-            client.delete_object(Bucket=S3_BUCKET_QMONKEY, Key=key)
+            client.delete_object(Bucket=S3_BUCKET, Key=key)
             return "", 204
 
         except ClientError as e:
