@@ -38,18 +38,11 @@ def send(recipient, subject, body, sender=None):
             Message=mensagem,
         )
 
-        print(
-            f"[SES] Email enviado com sucesso para {recipient}. MessageId: {response.get('MessageId')}"
-        )
         return {"message": "Email sent successfully", "response": response}
 
     except ClientError as e:
         error_code = e.response.get("Error", {}).get("Code", "")
         error_message = e.response.get("Error", {}).get("Message", str(e))
-
-        print(f"[SES Error] Code: {error_code}")
-        print(f"[SES Error] Message: {error_message}")
-        print(f"[SES Error] Recipient: {recipient}, Sender: {sender}")
 
         if error_code == "AccessDenied" or "not authorized" in error_message.lower():
             friendly_msg = (
@@ -76,7 +69,6 @@ def send(recipient, subject, body, sender=None):
         return {"error": friendly_msg}, 500
 
     except Exception as e:
-        print(f"[SES] Erro inesperado: {str(e)}")
         return {"error": f"Erro inesperado: {str(e)}"}, 500
 
 
@@ -214,24 +206,18 @@ def send_store_verification_email(store_data):
             Destination={"ToAddresses": [recipient]},
             Message=mensagem,
         )
-        print(
-            f"[SES] Store verification email sent. MessageId: {response.get('MessageId')}"
-        )
         return response
     except ClientError as e:
-        print(f"[SES Error] Store verification: {e.response['Error']['Message']}")
         return None
 
 
 def send_store_denial_email(store_data):
     user_id = store_data.get("users_fk")
     if not user_id:
-        print(f"[SES Error] User FK not found for store {store_data.get('stores_pk')}")
         return None
 
     user_object = UserModel.find_user(user_id)
     if not user_object:
-        print(f"[SES Error] User with ID {user_id} not found")
         return None
 
     recipient = user_object.email
@@ -272,12 +258,8 @@ def send_store_denial_email(store_data):
             Destination={"ToAddresses": [recipient]},
             Message=mensagem,
         )
-        print(
-            f"[SES] Store denial email sent to {recipient}. MessageId: {response.get('MessageId')}"
-        )
         return response
     except ClientError as e:
-        print(f"[SES Error] Store denial: {e.response['Error']['Message']}")
         return None
 
 
@@ -316,12 +298,8 @@ def reset_password(recipient, subject, password):
             Destination={"ToAddresses": [recipient]},
             Message=mensagem,
         )
-        print(
-            f"[SES] Password reset email sent to {recipient}. MessageId: {response.get('MessageId')}"
-        )
         return response
     except ClientError as e:
-        print(f"[SES Error] Password reset: {e.response['Error']['Message']}")
         return e
 
 
@@ -376,10 +354,6 @@ def level_up(recipient, subject):
             Destination={"ToAddresses": [recipient]},
             Message=mensagem,
         )
-        print(
-            f"[SES] Level up email sent to {recipient}. MessageId: {response.get('MessageId')}"
-        )
         return response
     except ClientError as e:
-        print(f"[SES Error] Level up: {e.response['Error']['Message']}")
         return None

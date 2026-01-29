@@ -110,9 +110,6 @@ class Images(Resource):
             error_code = e.response.get("Error", {}).get("Code", "")
             error_msg = e.response.get("Error", {}).get("Message", str(e))
 
-            print(f"[S3 Error] Code: {error_code}, Message: {error_msg}")
-            print(f"[S3 Config] Bucket: {BUCKET_NAME}")
-
             if error_code == "AccessDenied":
                 assets.abort(
                     500,
@@ -123,8 +120,6 @@ class Images(Resource):
                 assets.abort(500, f"Erro ao acessar S3: {error_msg}")
 
         images.sort(key=lambda x: x["name"].lower())
-
-        print(f"[S3] Listadas {len(images)} imagens do bucket {BUCKET_NAME}")
 
         return images, 200
 
@@ -190,8 +185,6 @@ class Images(Resource):
             error_code = e.response.get("Error", {}).get("Code", "")
             error_msg = e.response.get("Error", {}).get("Message", str(e))
 
-            print(f"[S3 Upload Error] Code: {error_code}, Message: {error_msg}")
-
             if error_code == "AccessDenied":
                 assets.abort(
                     500,
@@ -201,8 +194,6 @@ class Images(Resource):
                 assets.abort(500, f"Erro no upload para S3: {error_msg}")
 
         url = get_public_url(key)
-
-        print(f"[S3] Upload realizado: {key}")
 
         return {
             "id": key,
@@ -253,7 +244,6 @@ class ImageDetail(Resource):
         try:
             client.head_object(Bucket=BUCKET_NAME, Key=key)
             client.delete_object(Bucket=BUCKET_NAME, Key=key)
-            print(f"[S3] Deletado: {key}")
             return "", 204
 
         except ClientError as e:
