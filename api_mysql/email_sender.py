@@ -6,7 +6,7 @@ from models.users import UserModel
 
 config = Config(signature_version="s3v4")
 
-DEFAULT_SENDER = "no-reply@drunagor.app"
+DEFAULT_SENDER = "no-reply@wearecgs.com"
 
 
 def get_ses_client():
@@ -74,7 +74,7 @@ def send(recipient, subject, body, sender=None):
 
 def send_store_verification_email(store_data):
     recipient = "james@wearecgs.com"
-    sender = "store-verify@drunagor.app"
+    sender = "store-verify@wearecgs.com"
 
     name_or_id = (
         store_data.get("name")
@@ -221,7 +221,7 @@ def send_store_denial_email(store_data):
         return None
 
     recipient = user_object.email
-    sender = "no-reply@drunagor.app"
+    sender = "no-reply@wearecgs.com"
     store_name = store_data.get("name", "your store")
     subject = f"An update on your store submission: {store_name}"
 
@@ -264,7 +264,7 @@ def send_store_denial_email(store_data):
 
 
 def reset_password(recipient, subject, password):
-    sender = "no-reply@drunagor.app"
+    sender = "no-reply@wearecgs.com"
 
     body = f"""
         <html>
@@ -304,7 +304,7 @@ def reset_password(recipient, subject, password):
 
 
 def level_up(recipient, subject):
-    sender = "invite@drunagor.app"
+    sender = "invite@wearecgs.com"
 
     body = """
         <html>
