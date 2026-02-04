@@ -14,6 +14,16 @@ def _is_email(s: str) -> bool:
     return isinstance(s, str) and EMAIL_RE.match(s.strip()) is not None
 
 
+def _extract_error_message(resp):
+    if isinstance(resp, dict):
+        return resp.get("error") or resp.get("message", "Erro desconhecido")
+    elif isinstance(resp, tuple) and len(resp) >= 1:
+        payload = resp[0]
+        if isinstance(payload, dict):
+            return payload.get("error") or payload.get("message", "Erro desconhecido")
+    return str(resp)
+
+
 @sender.route("/send_bulk")
 class SenderSendBulk(Resource):
     def post(self):
@@ -30,16 +40,20 @@ class SenderSendBulk(Resource):
             return {"message": "Campo 'htmlContent' (ou 'body') é obrigatório."}, 400
 
         clean_recipients = []
+        invalid_emails = []
         for r in recipients:
             if isinstance(r, str):
-                r = r.strip()
+                r = r.strip().lower()
                 if _is_email(r):
                     clean_recipients.append(r)
+                else:
+                    invalid_emails.append(r)
 
         if not clean_recipients:
-            return {"message": "Nenhum e-mail válido em 'recipients'."}, 400
-
-        print(f"Enviando emails para: {clean_recipients}")
+            return {
+                "message": "Nenhum e-mail válido em 'recipients'.",
+                "invalid_emails": invalid_emails[:10],
+            }, 400
 
         results = {"sent": [], "failed": []}
 
@@ -49,12 +63,7 @@ class SenderSendBulk(Resource):
 
                 if isinstance(resp, dict):
                     if "error" in resp:
-                        error_msg = resp.get("error", "Erro desconhecido")
-                        if "not authorized" in error_msg.lower():
-                            error_msg += (
-                                " (Verifique permissões IAM e identidade no SES)"
-                            )
-
+                        error_msg = _extract_error_message(resp)
                         results["failed"].append({"email": email, "error": error_msg})
                     else:
                         results["sent"].append(email)
@@ -62,17 +71,7 @@ class SenderSendBulk(Resource):
                 elif isinstance(resp, tuple) and len(resp) == 2:
                     payload, status = resp
                     if status and int(status) >= 400:
-                        error_msg = payload.get("error") or payload.get(
-                            "message", "Erro no envio"
-                        )
-
-                        if "not authorized" in error_msg.lower():
-                            error_msg += (
-                                " (Verifique permissões IAM e identidade no SES)"
-                            )
-                        elif "not verified" in error_msg.lower():
-                            error_msg += " (Email/domínio não verificado no SES)"
-
+                        error_msg = _extract_error_message(payload)
                         results["failed"].append({"email": email, "error": error_msg})
                     else:
                         results["sent"].append(email)
@@ -81,13 +80,7 @@ class SenderSendBulk(Resource):
 
             except Exception as e:
                 error_msg = str(e)
-                print(f"Erro ao enviar para {email}: {error_msg}")
-
                 results["failed"].append({"email": email, "error": error_msg})
-
-        print(
-            f"Resultado: {len(results['sent'])} enviados, {len(results['failed'])} falharam"
-        )
 
         response = {
             "message": "Envio em lote concluído",
@@ -98,10 +91,15 @@ class SenderSendBulk(Resource):
             "failed": results["failed"],
         }
 
+        if invalid_emails:
+            response["invalid_emails"] = invalid_emails[:10]
+
         if len(results["sent"]) == 0 and len(results["failed"]) > 0:
-            return response, 500  # Todas falharam
+            return response, 500
+        elif len(results["failed"]) > 0:
+            return response, 207
         else:
-            return response, 200  # Sucesso total
+            return response, 200
 
 
 @sender.route("/send_to_contacts")
@@ -119,48 +117,62 @@ class SenderSendToContacts(Resource):
             return {"message": "Campo 'htmlContent' (ou 'body') é obrigatório."}, 400
 
         query = ContactModel.query
+
         if isinstance(ids, list) and ids:
             try:
                 ids = [int(x) for x in ids]
                 query = query.filter(ContactModel.contacts_pk.in_(ids))
-            except Exception:
+            except (ValueError, TypeError):
                 return {"message": "Campo 'ids' deve ser uma lista de inteiros."}, 400
 
         if only_active:
             query = query.filter_by(ativo=True)
 
         contacts = query.order_by(ContactModel.contacts_pk.asc()).all()
+
         if not contacts:
             return {"message": "Nenhum contato encontrado para envio."}, 404
 
         results = {"sent": [], "failed": []}
-        for c in contacts:
-            if not _is_email(c.email):
-                results["failed"].append({"email": c.email, "error": "E-mail inválido"})
+
+        for contact in contacts:
+            email = contact.email
+
+            if not _is_email(email):
+                results["failed"].append({"email": email, "error": "E-mail inválido"})
                 continue
+
             try:
-                resp = send(c.email, subject, html)
+                resp = send(email, subject, html)
+
                 if isinstance(resp, tuple) and len(resp) == 2:
                     payload, status = resp
                     if status and int(status) >= 400:
-                        results["failed"].append(
-                            {
-                                "email": c.email,
-                                "error": payload.get("error") or payload.get("message"),
-                            }
-                        )
+                        error_msg = _extract_error_message(payload)
+                        results["failed"].append({"email": email, "error": error_msg})
                     else:
-                        results["sent"].append(c.email)
+                        results["sent"].append(email)
+                elif isinstance(resp, dict) and "error" in resp:
+                    error_msg = _extract_error_message(resp)
+                    results["failed"].append({"email": email, "error": error_msg})
                 else:
-                    results["sent"].append(c.email)
-            except Exception as e:
-                results["failed"].append({"email": c.email, "error": str(e)})
+                    results["sent"].append(email)
 
-        return {
+            except Exception as e:
+                results["failed"].append({"email": email, "error": str(e)})
+
+        response = {
             "message": "Broadcast concluído",
             "total_contacts": len(contacts),
             "sent_count": len(results["sent"]),
             "failed_count": len(results["failed"]),
             "sent": results["sent"],
             "failed": results["failed"],
-        }, 200
+        }
+
+        if len(results["sent"]) == 0 and len(results["failed"]) > 0:
+            return response, 500
+        elif len(results["failed"]) > 0:
+            return response, 207
+        else:
+            return response, 200
