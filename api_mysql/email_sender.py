@@ -24,6 +24,45 @@ def send(recipient, subject, body, sender=None):
     if not sender:
         sender = DEFAULT_SENDER
 
+    if body and isinstance(body, str):
+        body = body.replace("{{email}}", recipient)
+
+    # Verifica se as configurações de SMTP estão no ambiente
+    import os
+    smtp_host = os.environ.get("SMTP_HOST")
+    smtp_port = os.environ.get("SMTP_PORT")
+    smtp_user = os.environ.get("SMTP_USER")
+    smtp_password = os.environ.get("SMTP_PASSWORD")
+
+    if smtp_host and smtp_user and smtp_password:
+        try:
+            port = int(smtp_port or "465")
+            import smtplib
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.text import MIMEText
+            
+            msg = MIMEMultipart('alternative')
+            msg['Subject'] = subject
+            msg['From'] = f"{sender} <{smtp_user}>" if "@" not in sender else sender
+            msg['To'] = recipient
+            msg.attach(MIMEText(body, 'html', 'utf-8'))
+            
+            if port == 465:
+                server = smtplib.SMTP_SSL(smtp_host, port, timeout=15)
+            else:
+                server = smtplib.SMTP(smtp_host, port, timeout=15)
+                server.starttls()
+                
+            server.login(smtp_user, smtp_password)
+            server.sendmail(smtp_user, [recipient], msg.as_string())
+            server.quit()
+            
+            return {"message": "Email sent successfully via SMTP"}
+        except Exception as e:
+            print(f"Error sending via SMTP: {e}")
+            return {"error": f"Erro ao enviar via SMTP: {str(e)}"}, 500
+
+    # Fallback para o AWS SES caso não haja SMTP configurado
     ses_client = get_ses_client()
 
     mensagem = {
