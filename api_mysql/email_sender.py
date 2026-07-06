@@ -20,6 +20,71 @@ def get_ses_client():
     )
 
 
+def append_to_sent_folder(subject, html_body, recipient, sender):
+    import os
+    import imaplib
+    import time
+    import re
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    smtp_user = os.environ.get("SMTP_USER")
+    smtp_password = os.environ.get("SMTP_PASSWORD")
+    if not smtp_user or not smtp_password:
+        return False
+
+    # Define IMAP host: if not set, auto-detect from SMTP host
+    imap_host = os.environ.get("IMAP_HOST")
+    if not imap_host:
+        smtp_host = os.environ.get("SMTP_HOST", "")
+        if "hostinger" in smtp_host:
+            imap_host = "imap.hostinger.com"
+        elif "gmail" in smtp_host:
+            imap_host = "imap.gmail.com"
+        else:
+            imap_host = smtp_host.replace("smtp", "imap")
+
+    try:
+        imap_port = int(os.environ.get("IMAP_PORT", "993"))
+    except ValueError:
+        imap_port = 993
+
+    try:
+        # Create message
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = subject
+        msg['From'] = f"{sender} <{smtp_user}>" if "@" not in sender else sender
+        msg['To'] = recipient
+        msg.attach(MIMEText(html_body, 'html', 'utf-8'))
+
+        mail = imaplib.IMAP4_SSL(imap_host, imap_port, timeout=10)
+        mail.login(smtp_user, smtp_password)
+
+        sent_folder = None
+        status, folders = mail.list()
+        if status == 'OK':
+            for f in folders:
+                f_str = f.decode('utf-8', errors='ignore')
+                if 'sent' in f_str.lower() or 'enviado' in f_str.lower():
+                    match = re.search(r'"([^"]+)"$', f_str)
+                    if match:
+                        sent_folder = match.group(1)
+                    else:
+                        sent_folder = f_str.split()[-1]
+                    break
+
+        if not sent_folder:
+            sent_folder = 'Sent'
+
+        mail.select(sent_folder)
+        mail.append(sent_folder, '\\Seen', imaplib.Time2Internaldate(time.time()), msg.as_bytes())
+        mail.logout()
+        return True
+    except Exception as e:
+        print(f"Error appending to IMAP Sent folder: {e}")
+        return False
+
+
 def send(recipient, subject, body, sender=None):
     if not sender:
         sender = DEFAULT_SENDER
@@ -57,6 +122,12 @@ def send(recipient, subject, body, sender=None):
             server.sendmail(smtp_user, [recipient], msg.as_string())
             server.quit()
             
+            # Tenta sincronizar a cópia na pasta Enviados via IMAP
+            try:
+                append_to_sent_folder(subject, body, recipient, sender)
+            except Exception as imap_err:
+                print(f"Failed to append to IMAP sent folder: {imap_err}")
+
             return {"message": "Email sent successfully via SMTP"}
         except Exception as e:
             print(f"Error sending via SMTP: {e}")
