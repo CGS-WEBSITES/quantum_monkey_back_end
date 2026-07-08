@@ -244,6 +244,22 @@ class SenderParseInvoices(Resource):
                 return {"message": "Arquivo vazio."}, 400
             file_stream = BytesIO(raw)
 
+            # Upload spreadsheet to S3
+            try:
+                from resources.s3_images import get_s3_client, BUCKET_NAME
+                s3_client = get_s3_client()
+                s3_client.upload_fileobj(
+                    Fileobj=BytesIO(raw),
+                    Bucket=BUCKET_NAME,
+                    Key=file.filename,
+                    ExtraArgs={
+                        "ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    }
+                )
+                print(f"Uploaded {file.filename} to S3 bucket {BUCKET_NAME} successfully.")
+            except Exception as s3_err:
+                print(f"Error uploading file to S3: {s3_err}")
+
             # Parse Excel using standard zipfile + ElementTree
             ns = {
                 'main': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
@@ -276,6 +292,20 @@ class SenderParseInvoices(Resource):
                 def get_col_letter(cell_ref):
                     return "".join([c for c in cell_ref if c.isalpha()])
 
+                # Fetch all contacts for name matching
+                contacts = ContactModel.query.filter(ContactModel.name.isnot(None)).all()
+                
+                def normalize_name(n):
+                    if not n:
+                        return ""
+                    import unicodedata
+                    n = unicodedata.normalize('NFKD', n).encode('ASCII', 'ignore').decode('utf-8')
+                    return " ".join(n.lower().split())
+
+                contact_map = {}
+                for c in contacts:
+                    contact_map[normalize_name(c.name)] = c.email
+
                 invoices = []
                 for row in root.findall('.//main:row', ns):
                     row_cells = {}
@@ -295,42 +325,198 @@ class SenderParseInvoices(Resource):
                                     val = ""
                         row_cells[col] = val.strip() if isinstance(val, str) else val
 
-                    name = row_cells.get('A', '')
-                    email = row_cells.get('B', '')
-
-                    if not name or not email or '@' not in email:
+                    name = row_cells.get('A', '').strip()
+                    if not name:
                         continue
 
-                    # Skip header row if name looks like a header
-                    if name.lower() in ["name", "nome", "full name", "nome completo"]:
+                    # Skip header row or exchange rate row
+                    if name.lower() in ["funcionário/sócio", "funcionario/socio", "name", "nome", "full name", "nome completo", "cotação", "cotacao"] or "cgs" in name.lower() or name.replace('.', '', 1).isdigit():
+                        continue
+
+                    # Skip if row doesn't have relevant values
+                    if 'E' not in row_cells and 'K' not in row_cells:
                         continue
 
                     def to_float(v):
                         if not v:
                             return 0.0
                         try:
-                            return float(str(v).replace(',', '.'))
+                            return float(str(v).replace(',', '.').strip())
                         except ValueError:
                             return 0.0
 
-                    salary = to_float(row_cells.get('C', '0'))
-                    mei = to_float(row_cells.get('D', '0'))
-                    lunch = to_float(row_cells.get('E', '0'))
-                    other = to_float(row_cells.get('F', '0'))
+                    salary_brl = to_float(row_cells.get('E', '0'))
+                    mei_brl = to_float(row_cells.get('F', '0'))
+                    lunch_brl = to_float(row_cells.get('G', '0'))
+                    extra_brl = to_float(row_cells.get('H', '0'))
+                    lucro_brl = to_float(row_cells.get('I', '0'))
+                    total_brl = to_float(row_cells.get('J', '0'))
+
+                    salary_usd = to_float(row_cells.get('K', '0'))
+                    extra_usd = to_float(row_cells.get('L', '0'))
+                    total_usd = to_float(row_cells.get('N', '0'))
+
+                    # Skip rows that are empty or totals row
+                    if salary_usd <= 0 and salary_brl <= 0:
+                        continue
+
+                    email = contact_map.get(normalize_name(name), "")
 
                     invoices.append({
                         "name": name,
                         "email": email,
-                        "salary_brl": salary,
-                        "mei_brl": mei,
-                        "lunch_brl": lunch,
-                        "other_benefits_brl": other
+                        "salary_brl": salary_brl,
+                        "mei_brl": mei_brl,
+                        "lunch_brl": lunch_brl,
+                        "other_benefits_brl": extra_brl + lucro_brl,
+                        "salary_usd": salary_usd,
+                        "extra_usd": extra_usd,
+                        "total_usd": total_usd
                     })
 
                 return {"invoices": invoices}, 200
 
         except Exception as e:
             return {"message": f"Erro ao processar planilha: {str(e)}"}, 500
+
+
+@sender.route("/send_invoice_single")
+class SenderSendInvoiceSingle(Resource):
+    def post(self):
+        data = request.get_json(silent=True) or {}
+        invoice = data.get("invoice")
+        month_year = (data.get("month_year") or "").strip()
+        due_date = (data.get("due_date") or "").strip()
+        test_mode = bool(data.get("test_mode", True))
+        sender_name = (data.get("sender_name") or "Bárbara Delmas").strip()
+        sender_email = (data.get("sender_email") or "admin@wearecgs.com").strip()
+
+        if not invoice:
+            return {"message": "Campo 'invoice' é obrigatório."}, 400
+        if not month_year:
+            return {"message": "Mês/Ano 'month_year' é obrigatório."}, 400
+        if not due_date:
+            return {"message": "Data de vencimento 'due_date' é obrigatória."}, 400
+
+        name = invoice.get("name")
+        email = invoice.get("email")
+        salary_usd = float(invoice.get("salary_usd", 0))
+        extra_usd = float(invoice.get("extra_usd", 0))
+        total_usd = salary_usd + extra_usd
+
+        # Subject
+        subject = f"CGS ::: Confirmation of Payment Amount and Request for Invoice Submission Invoices Staff – {month_year}"
+
+        html_template = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>Invoice Confirmation</title>
+            <style>
+                body {{
+                    font-family: Arial, Helvetica, sans-serif;
+                    font-size: 14px;
+                    line-height: 1.5;
+                    color: #222222;
+                }}
+                p {{
+                    margin: 0 0 16px 0;
+                }}
+                ol {{
+                    margin: 0 0 16px 20px;
+                    padding: 0;
+                }}
+                li {{
+                    margin-bottom: 6px;
+                }}
+                a {{
+                    color: #1155cc;
+                    text-decoration: underline;
+                }}
+                .signature-table {{
+                    margin-top: 30px;
+                    border-top: 1px solid #e0e0e0;
+                    padding-top: 20px;
+                }}
+            </style>
+        </head>
+        <body>
+            <p>Dear {name},</p>
+            
+            <p>I trust this email finds you in good health. We want to express our sincere appreciation for the exceptional work you've been contributing as a valuable member of our team. Your dedication and commitment to our projects are highly regarded.</p>
+            
+            <p>We are reaching out to confirm the amount owed to you for the services you've provided. According to our records, <strong>the total amount is $ {salary_usd:.2f} USD, plus a reimbursement for lunch and other associated costs totaling $ {extra_usd:.2f} USD.</strong></p>
+            
+            <p>Please take a moment to review this amount and cross-check it with your records and do let us know if you find any discrepancies.</p>
+            
+            <p>To make the payment process smoother, we kindly request that you submit your invoice by {due_date}. To ensure a seamless and punctual payment, please include the following details in your invoice:</p>
+            
+            <ol>
+                <li>Your full name or company name.</li>
+                <li>Invoice dates.</li>
+                <li>A comprehensive breakdown of services provided, including descriptions, quantities, and rates.</li>
+                <li>Payment due date: {due_date}.</li>
+            </ol>
+            
+            <p>You can send your invoice by replying to this email, addressing it to all relevant contacts (<a href="mailto:admin@wearecgs.com">admin@wearecgs.com</a>, <a href="mailto:marcio@wearecgs.com">marcio@wearecgs.com</a>, <a href="mailto:pmo@wearecgs.com">pmo@wearecgs.com</a>). If you have any questions or require further information, please don't hesitate to get in touch with our finance department at the previously mentioned email addresses.</p>
+            
+            <p>We fully understand the importance of timely payments and remain committed to ensuring that you receive your compensation promptly. Your cooperation in promptly submitting the invoice will greatly assist us in achieving this goal.</p>
+            
+            <p>Moreover, you have the option to generate your invoice directly through the Wise website using the following link: <a href="https://wise.com/us/invoice-generator" target="_blank">https://wise.com/us/invoice-generator</a>.</p>
+            
+            <p>If you need assistance with creating your invoice, please refer to the following link: <a href="https://www.notion.so/wearecgs/External-invoice-creation-wise-54053bda0fce420281a1accee381e549?pvs=4" target="_blank">https://www.notion.so/wearecgs/External-invoice-creation-wise-54053bda0fce420281a1accee381e549?pvs=4</a>.</p>
+            
+            <p>Once again, we want to express our gratitude for your unwavering dedication to our projects, and we eagerly anticipate the continuation of our successful collaboration.</p>
+            
+            <p>Thank you for your attention to this matter.</p>
+            
+            <p>Best regards,</p>
+            
+            <table class="signature-table" border="0" cellpadding="0" cellspacing="0">
+                <tr>
+                    <td style="padding-right: 15px; vertical-align: top;">
+                        <img src="https://druna-assets.s3.us-east-2.amazonaws.com/cgs_logo.jpg" width="80" height="80" style="border-radius: 12px; object-fit: contain; border: 1px solid #e0e0e0; background: #ffffff; padding: 4px;" alt="CGS Logo">
+                    </td>
+                    <td style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.4; color: #333333; vertical-align: top;">
+                        <strong style="color: #fb8c00; font-size: 16px;">{sender_name}</strong><br>
+                        Finance & Operations Analyst<br>
+                        CGS Group LLC<br>
+                        Creative Games Studio | Games ForFun<br>
+                        <br>
+                        ✉️ <a href="mailto:admin@wearecgs.com">admin@wearecgs.com</a><br>
+                        🌐 <a href="https://wearecgs.com">wearecgs.com</a><br>
+                        🎮 Discord ID: barbaradelmas
+                    </td>
+                </tr>
+            </table>
+        </body>
+        </html>
+        """
+
+        body = html_template.format(
+            name=name,
+            salary_usd=salary_usd,
+            extra_usd=extra_usd,
+            total_usd=total_usd,
+            due_date=due_date,
+            sender_name=sender_name
+        )
+
+        recipient = "luiseduardoekenya7@gmail.com" if test_mode else email
+        if not recipient:
+            return {"message": "E-mail do destinatário não encontrado."}, 400
+
+        try:
+            resp = send(recipient, subject, body, sender=sender_email)
+            if isinstance(resp, dict) and "error" in resp:
+                return {"message": resp["error"]}, 500
+            
+            # Log single email in DB if we want, or just return success
+            return {"message": "E-mail enviado com sucesso!"}, 200
+        except Exception as e:
+            return {"message": str(e)}, 500
+
 
 
 @sender.route("/send_invoices")
