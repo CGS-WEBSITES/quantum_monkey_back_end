@@ -437,6 +437,14 @@ class SenderParseInvoices(Resource):
                             diferenca_usd = 0.0
                         else:
                             wise_fee = 6.47
+                            normalized_name = name.lower().replace(' ', '')
+                            if 'luiseduardo' in normalized_name:
+                                wise_fee = 4.47
+                            elif 'barbaradelmas' in normalized_name:
+                                wise_fee = 7.47
+                            elif 'brunoveloso' in normalized_name:
+                                wise_fee = 6.47
+                            
                             diferenca_usd = difference - wise_fee
                     else:
                         # Negative difference or zero difference
