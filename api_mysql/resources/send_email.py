@@ -332,6 +332,23 @@ class SenderParseInvoices(Resource):
                     if email_col:
                         break
 
+                # Get exchange rate from cell A1
+                exchange_rate = 5.0  # default fallback
+                for row in root.findall('.//main:row', ns):
+                    row_idx = int(row.get('r') or 0)
+                    if row_idx == 1:
+                        for c in row.findall('main:c', ns):
+                            cell_ref = c.get('r')
+                            if get_col_letter(cell_ref) == 'A':
+                                val_el = c.find('main:v', ns)
+                                if val_el is not None:
+                                    try:
+                                        exchange_rate = float(val_el.text.strip().replace(',', '.'))
+                                    except ValueError:
+                                        pass
+                                break
+                        break
+
                 invoices = []
                 for row in root.findall('.//main:row', ns):
                     row_cells = {}
@@ -378,12 +395,40 @@ class SenderParseInvoices(Resource):
                     lucro_brl = to_float(row_cells.get('I', '0'))
                     total_brl = to_float(row_cells.get('J', '0'))
 
-                    salary_usd = to_float(row_cells.get('K', '0'))
-                    extra_usd = to_float(row_cells.get('L', '0'))
-                    total_usd = to_float(row_cells.get('N', '0'))
+                    # Get raw columns
+                    salary_usd_val = to_float(row_cells.get('K', '0'))
+                    profit_usd_val = to_float(row_cells.get('M', '0'))
+                    total_usd_val = to_float(row_cells.get('R', '0'))  # Column R is the final paid amount
+
+                    # If Column R is empty, fall back to Column O
+                    if total_usd_val <= 0:
+                        total_usd_val = to_float(row_cells.get('O', '0'))
+
+                    # If Column O is also empty, fall back to sum of salary and profit
+                    if total_usd_val <= 0:
+                        total_usd_val = salary_usd_val + profit_usd_val
+
+                    # If Column K (salary_usd) is empty, convert E (salary_brl)
+                    if salary_usd_val <= 0 and salary_brl > 0 and exchange_rate > 0:
+                        salary_usd_val = salary_brl / exchange_rate
+
+                    # If Column M (profit_usd) is empty, convert I (lucro_brl)
+                    if profit_usd_val <= 0 and lucro_brl > 0 and exchange_rate > 0:
+                        profit_usd_val = lucro_brl / exchange_rate
+
+                    # Check if they have reimbursement (MEI or Lunch or Extra BRL)
+                    has_reimbursement = (mei_brl > 0 or lunch_brl > 0 or extra_brl > 0)
+
+                    if has_reimbursement:
+                        extra_usd = total_usd_val - salary_usd_val - profit_usd_val
+                        if extra_usd < 0:
+                            extra_usd = 0.0
+                    else:
+                        extra_usd = 0.0
+                        salary_usd_val = total_usd_val - profit_usd_val
 
                     # Skip rows that are empty or totals row
-                    if salary_usd <= 0 and salary_brl <= 0:
+                    if total_usd_val <= 0 and salary_usd_val <= 0 and salary_brl <= 0:
                         continue
 
                     email_source = None
@@ -405,10 +450,11 @@ class SenderParseInvoices(Resource):
                         "salary_brl": salary_brl,
                         "mei_brl": mei_brl,
                         "lunch_brl": lunch_brl,
-                        "other_benefits_brl": extra_brl + lucro_brl,
-                        "salary_usd": salary_usd,
+                        "other_benefits_brl": extra_brl,
+                        "salary_usd": salary_usd_val,
                         "extra_usd": extra_usd,
-                        "total_usd": total_usd
+                        "profit_usd": profit_usd_val,
+                        "total_usd": total_usd_val
                     })
 
                 return {"invoices": invoices}, 200
@@ -439,10 +485,21 @@ class SenderSendInvoiceSingle(Resource):
         email = invoice.get("email")
         salary_usd = float(invoice.get("salary_usd", 0))
         extra_usd = float(invoice.get("extra_usd", 0))
-        total_usd = salary_usd + extra_usd
+        profit_usd = float(invoice.get("profit_usd", 0))
+        total_usd = salary_usd + extra_usd + profit_usd
 
         # Subject
         subject = f"CGS ::: Confirmation of Payment Amount and Request for Invoice Submission Invoices Staff – {month_year}"
+
+        # Construct dynamic payment text
+        profit_text = ""
+        if profit_usd > 0:
+            profit_text = f" And more $ {profit_usd:.2f} USD for profit distribution."
+
+        if extra_usd > 0:
+            payment_text = f"According to our records, <strong>the total amount is $ {salary_usd:.2f} USD, plus a reimbursement for lunch and other associated costs totaling $ {extra_usd:.2f} USD.</strong>{profit_text}"
+        else:
+            payment_text = f"According to our records, <strong>the total amount is $ {salary_usd:.2f} USD.</strong>{profit_text}"
 
         html_template = """
         <!DOCTYPE html>
@@ -483,7 +540,7 @@ class SenderSendInvoiceSingle(Resource):
             
             <p>I trust this email finds you in good health. We want to express our sincere appreciation for the exceptional work you've been contributing as a valuable member of our team. Your dedication and commitment to our projects are highly regarded.</p>
             
-            <p>We are reaching out to confirm the amount owed to you for the services you've provided. According to our records, <strong>the total amount is $ {salary_usd:.2f} USD, plus a reimbursement for lunch and other associated costs totaling $ {extra_usd:.2f} USD.</strong></p>
+            <p>We are reaching out to confirm the amount owed to you for the services you've provided. {payment_text}</p>
             
             <p>Please take a moment to review this amount and cross-check it with your records and do let us know if you find any discrepancies.</p>
             
@@ -533,9 +590,7 @@ class SenderSendInvoiceSingle(Resource):
 
         body = html_template.format(
             name=name,
-            salary_usd=salary_usd,
-            extra_usd=extra_usd,
-            total_usd=total_usd,
+            payment_text=payment_text,
             due_date=due_date,
             sender_name=sender_name
         )
@@ -631,7 +686,7 @@ class SenderSendInvoices(Resource):
                     
                     <p>I trust this email finds you in good health. We want to express our sincere appreciation for the exceptional work you've been contributing as a valuable member of our team. Your dedication and commitment to our projects are highly regarded.</p>
                     
-                    <p>We are reaching out to confirm the amount owed to you for the services you've provided. According to our records, <strong>the total amount is $ {salary_usd:.2f} USD, plus a reimbursement for lunch and other associated costs totaling $ {extra_usd:.2f} USD.</strong></p>
+                    <p>We are reaching out to confirm the amount owed to you for the services you've provided. {payment_text}</p>
                     
                     <p>Please take a moment to review this amount and cross-check it with your records and do let us know if you find any discrepancies.</p>
                     
@@ -684,17 +739,26 @@ class SenderSendInvoices(Resource):
                     email = inv.get("email")
                     salary_usd = float(inv.get("salary_usd", 0))
                     extra_usd = float(inv.get("extra_usd", 0))
-                    total_usd = salary_usd + extra_usd
+                    profit_usd = float(inv.get("profit_usd", 0))
+                    total_usd = salary_usd + extra_usd + profit_usd
 
                     # Subject
                     subject = f"CGS ::: Confirmation of Payment Amount and Request for Invoice Submission Invoices Staff – {m_y}"
 
+                    # Construct dynamic payment text
+                    profit_text = ""
+                    if profit_usd > 0:
+                        profit_text = f" And more $ {profit_usd:.2f} USD for profit distribution."
+
+                    if extra_usd > 0:
+                        payment_text = f"According to our records, <strong>the total amount is $ {salary_usd:.2f} USD, plus a reimbursement for lunch and other associated costs totaling $ {extra_usd:.2f} USD.</strong>{profit_text}"
+                    else:
+                        payment_text = f"According to our records, <strong>the total amount is $ {salary_usd:.2f} USD.</strong>{profit_text}"
+
                     # Body format
                     body = html_template.format(
                         name=name,
-                        salary_usd=salary_usd,
-                        extra_usd=extra_usd,
-                        total_usd=total_usd,
+                        payment_text=payment_text,
                         due_date=d_d,
                         sender_name=s_name
                     )
