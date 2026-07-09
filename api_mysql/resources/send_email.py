@@ -383,8 +383,13 @@ class SenderParseInvoices(Resource):
                     def to_float(v):
                         if not v:
                             return 0.0
+                        cleaned = str(v).replace('R$', '').replace('$', '').replace(' ', '').strip()
+                        if cleaned == '-':
+                            return 0.0
+                        if ',' in cleaned:
+                            cleaned = cleaned.replace('.', '').replace(',', '.')
                         try:
-                            return float(str(v).replace(',', '.').strip())
+                            return float(cleaned)
                         except ValueError:
                             return 0.0
 
@@ -395,75 +400,21 @@ class SenderParseInvoices(Resource):
                     lucro_brl = to_float(row_cells.get('I', '0'))
                     total_brl = to_float(row_cells.get('J', '0'))
 
-                    # Get raw columns
+                    # Read USD values directly from Columns K, L, M, N
                     salary_usd_val = to_float(row_cells.get('K', '0'))
+                    extra_usd = to_float(row_cells.get('L', '0'))
                     profit_usd_val = to_float(row_cells.get('M', '0'))
-                    total_usd_val = to_float(row_cells.get('R', '0'))  # Column R is the final paid amount
+                    total_usd_val = to_float(row_cells.get('N', '0'))
 
-                    # If Column R is empty, fall back to Column O
-                    if total_usd_val <= 0:
-                        total_usd_val = to_float(row_cells.get('O', '0'))
-
-                    # If Column O is also empty, fall back to sum of salary and profit
-                    if total_usd_val <= 0:
-                        total_usd_val = salary_usd_val + profit_usd_val
-
-                    # If Column K (salary_usd) is empty, convert E (salary_brl)
+                    # Fallbacks if columns are not filled but BRL ones are
                     if salary_usd_val <= 0 and salary_brl > 0 and exchange_rate > 0:
                         salary_usd_val = salary_brl / exchange_rate
-
-                    # If Column M (profit_usd) is empty, convert I (lucro_brl)
                     if profit_usd_val <= 0 and lucro_brl > 0 and exchange_rate > 0:
                         profit_usd_val = lucro_brl / exchange_rate
-
-                    # Get base reimbursement from BRL columns converted to USD
-                    base_reimbursement_usd = 0.0
-                    if exchange_rate > 0:
-                        base_reimbursement_usd = (mei_brl + lunch_brl + extra_brl) / exchange_rate
-
-                    calculo_final = salary_usd_val + base_reimbursement_usd + profit_usd_val
-                    difference = total_usd_val - calculo_final
-
-                    # Determine Wise fee and Diferença (Col P)
-                    wise_fee = 0.0
-                    diferenca_usd = 0.0
-
-                    if difference > 0:
-                        if difference <= 2.50:
-                            wise_fee = difference
-                            diferenca_usd = 0.0
-                        elif 6.00 <= difference <= 8.00:
-                            wise_fee = difference
-                            diferenca_usd = 0.0
-                        else:
-                            wise_fee = 6.47
-                            normalized_name = name.lower().replace(' ', '')
-                            if 'luiseduardo' in normalized_name:
-                                wise_fee = 4.47
-                            elif 'barbaradelmas' in normalized_name:
-                                wise_fee = 7.47
-                            elif 'brunoveloso' in normalized_name:
-                                wise_fee = 6.47
-                            
-                            diferenca_usd = difference - wise_fee
-                    else:
-                        # Negative difference or zero difference
-                        wise_fee = 0.0
-                        diferenca_usd = difference
-
-                    # Check if they have reimbursement (MEI or Lunch or Extra BRL)
-                    has_reimbursement = (mei_brl > 0 or lunch_brl > 0 or extra_brl > 0)
-
-                    if has_reimbursement:
-                        extra_usd = base_reimbursement_usd + diferenca_usd
-                        if extra_usd < 0:
-                            extra_usd = 0.0
+                    if extra_usd <= 0 and (mei_brl > 0 or lunch_brl > 0 or extra_brl > 0) and exchange_rate > 0:
+                        extra_usd = (mei_brl + lunch_brl + extra_brl) / exchange_rate
+                    if total_usd_val <= 0:
                         total_usd_val = salary_usd_val + extra_usd + profit_usd_val
-                    else:
-                        extra_usd = 0.0
-                        # If no reimbursement, the difference goes to salary
-                        salary_usd_val = salary_usd_val + diferenca_usd
-                        total_usd_val = salary_usd_val + profit_usd_val
 
                     # Skip rows that are empty or totals row
                     if total_usd_val <= 0 and salary_usd_val <= 0 and salary_brl <= 0:
@@ -471,7 +422,16 @@ class SenderParseInvoices(Resource):
 
                     email_source = None
                     email = ""
-                    if email_col and row_cells.get(email_col):
+                    # Check Column Q first
+                    if row_cells.get('Q') and '@' in str(row_cells.get('Q')):
+                        email = str(row_cells.get('Q')).strip()
+                        email_source = "spreadsheet"
+                    # Check Column V next
+                    elif row_cells.get('V') and '@' in str(row_cells.get('V')):
+                        email = str(row_cells.get('V')).strip()
+                        email_source = "spreadsheet"
+                    # Check dynamically found email column
+                    elif email_col and row_cells.get(email_col):
                         email = str(row_cells.get(email_col)).strip()
                         if email:
                             email_source = "spreadsheet"
