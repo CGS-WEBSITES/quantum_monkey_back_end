@@ -306,6 +306,32 @@ class SenderParseInvoices(Resource):
                 for c in contacts:
                     contact_map[normalize_name(c.name)] = c.email
 
+                # Detect an "email" column dynamically in the first 5 rows
+                email_col = None
+                for row in root.findall('.//main:row', ns):
+                    row_idx = int(row.get('r') or 0)
+                    if row_idx > 5:
+                        break
+                    for c in row.findall('main:c', ns):
+                        cell_ref = c.get('r')
+                        col = get_col_letter(cell_ref)
+                        cell_type = c.get('t')
+                        val_el = c.find('main:v', ns)
+                        val = ""
+                        if val_el is not None:
+                            val = val_el.text
+                            if cell_type == 's':
+                                idx = int(val)
+                                if 0 <= idx < len(shared_strings):
+                                    val = shared_strings[idx]
+                        if val and isinstance(val, str):
+                            val_clean = val.strip().lower()
+                            if val_clean in ["email", "e-mail", "emails", "e-mails"]:
+                                email_col = col
+                                break
+                    if email_col:
+                        break
+
                 invoices = []
                 for row in root.findall('.//main:row', ns):
                     row_cells = {}
@@ -360,11 +386,22 @@ class SenderParseInvoices(Resource):
                     if salary_usd <= 0 and salary_brl <= 0:
                         continue
 
-                    email = contact_map.get(normalize_name(name), "")
+                    email_source = None
+                    email = ""
+                    if email_col and row_cells.get(email_col):
+                        email = str(row_cells.get(email_col)).strip()
+                        if email:
+                            email_source = "spreadsheet"
+
+                    if not email:
+                        email = contact_map.get(normalize_name(name), "")
+                        if email:
+                            email_source = "database"
 
                     invoices.append({
                         "name": name,
                         "email": email,
+                        "email_source": email_source,
                         "salary_brl": salary_brl,
                         "mei_brl": mei_brl,
                         "lunch_brl": lunch_brl,
