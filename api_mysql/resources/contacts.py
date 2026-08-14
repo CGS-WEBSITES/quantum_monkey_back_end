@@ -31,9 +31,10 @@ contact_model = contact.model(
 
 @contact.route("/")
 class ContactList(Resource):
-    @jwt_required()
+    @jwt_required(optional=True)
     @contact.marshal_list_with(contact_model)
     def get(self):
+
         list_id_param = request.args.get("list_id")
         query = ContactModel.query.filter_by(ativo=True)
 

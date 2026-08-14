@@ -21,16 +21,17 @@ list_model = email_list_ns.model(
 
 @email_list_ns.route("/")
 class EmailListCollection(Resource):
-    @jwt_required()
+    @jwt_required(optional=True)
     def get(self):
         # Garantir que existe ao menos a lista padrão 'Marketing'
         EmailListModel.get_or_create_default()
         lists = EmailListModel.query.filter_by(ativo=True).order_by(EmailListModel.id.asc()).all()
         return [l.json() for l in lists], 200
 
-    @jwt_required()
+    @jwt_required(optional=True)
     @email_list_ns.expect(list_model, validate=True)
     def post(self):
+
         data = request.get_json(silent=True) or {}
         name = (data.get("name") or "").strip()
         if not name:
