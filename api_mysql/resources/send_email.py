@@ -51,13 +51,18 @@ class SenderSendBulk(Resource):
         if not html:
             return {"message": "Campo 'htmlContent' (ou 'body') é obrigatório."}, 400
 
+        # Get all inactive emails to filter out
+        inactive_contacts = ContactModel.query.filter_by(ativo=False).all()
+        inactive_emails = {c.email for c in inactive_contacts}
+
         clean_recipients = []
         invalid_emails = []
         for r in recipients:
             if isinstance(r, str):
                 r = r.strip().lower()
                 if _is_email(r):
-                    clean_recipients.append(r)
+                    if r not in inactive_emails:
+                        clean_recipients.append(r)
                 else:
                     invalid_emails.append(r)
 
@@ -85,7 +90,7 @@ class SenderSendBulk(Resource):
                 failed_count = 0
                 for email in recipients_list:
                     try:
-                        resp = send(email, email_subject, email_html)
+                        resp = send(email, email_subject, email_html, use_ses=True)
                         if isinstance(resp, dict) and "error" in resp:
                             failed_count += 1
                         else:
@@ -131,6 +136,7 @@ class SenderSendToContacts(Resource):
         html = data.get("htmlContent") or data.get("body") or ""
         only_active = bool(data.get("only_active", True))
         ids = data.get("ids")
+        list_id = data.get("list_id")
 
         if not subject:
             return {"message": "Campo 'subject' é obrigatório."}, 400
@@ -138,6 +144,14 @@ class SenderSendToContacts(Resource):
             return {"message": "Campo 'htmlContent' (ou 'body') é obrigatório."}, 400
 
         query = ContactModel.query
+
+        if list_id is not None:
+            try:
+                lid = int(list_id)
+                if lid > 0:
+                    query = query.filter_by(list_id=lid)
+            except (ValueError, TypeError):
+                pass
 
         if isinstance(ids, list) and ids:
             try:
@@ -150,6 +164,7 @@ class SenderSendToContacts(Resource):
             query = query.filter_by(ativo=True)
 
         contacts = query.order_by(ContactModel.contacts_pk.asc()).all()
+
 
         if not contacts:
             return {"message": "Nenhum contato encontrado para envio."}, 404
@@ -181,7 +196,7 @@ class SenderSendToContacts(Resource):
                 failed_count = 0
                 for email in recipients_list:
                     try:
-                        resp = send(email, email_subject, email_html)
+                        resp = send(email, email_subject, email_html, use_ses=True)
                         if isinstance(resp, dict) and "error" in resp:
                             failed_count += 1
                         else:
@@ -598,7 +613,7 @@ class SenderSendInvoiceSingle(Resource):
             return {"message": "E-mail do destinatário não encontrado."}, 400
 
         try:
-            resp = send(recipient, subject, body, sender=sender_email)
+            resp = send(recipient, subject, body, sender=sender_email, use_ses=False)
             if isinstance(resp, dict) and "error" in resp:
                 return {"message": resp["error"]}, 500
             
@@ -764,7 +779,7 @@ class SenderSendInvoices(Resource):
                     recipient = "luiseduardoekenya7@gmail.com" if is_test else email
 
                     try:
-                        resp = send(recipient, subject, body, sender=s_email)
+                        resp = send(recipient, subject, body, sender=s_email, use_ses=False)
                         if isinstance(resp, dict) and "error" in resp:
                             failed_count += 1
                         else:

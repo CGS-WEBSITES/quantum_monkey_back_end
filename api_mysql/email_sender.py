@@ -85,12 +85,16 @@ def append_to_sent_folder(subject, html_body, recipient, sender):
         return False
 
 
-def send(recipient, subject, body, sender=None):
+def send(recipient, subject, body, sender=None, use_ses=None):
     if not sender:
         sender = DEFAULT_SENDER
 
     if body and isinstance(body, str):
         body = body.replace("{{email}}", recipient)
+
+    if use_ses is None:
+        # Se não especificado, usa SES para e-mails gerais e SMTP para invoices
+        use_ses = (sender != "admin@wearecgs.com")
 
     # Verifica se as configurações de SMTP estão no ambiente
     import os
@@ -99,7 +103,7 @@ def send(recipient, subject, body, sender=None):
     smtp_user = os.environ.get("SMTP_USER")
     smtp_password = os.environ.get("SMTP_PASSWORD")
 
-    if smtp_host and smtp_user and smtp_password:
+    if not use_ses and smtp_host and smtp_user and smtp_password:
         try:
             port = int(smtp_port or "465")
             import smtplib

@@ -49,6 +49,7 @@ class UserRegister(Resource):
 
     @user.expect(atributos, validate=True)
     def post(self):
+        return {"message": "Account creation is disabled."}, 403
         dados = self.atributos.parse_args()
 
         if not dados["email"] or dados["email"] is None:

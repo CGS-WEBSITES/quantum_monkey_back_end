@@ -2,6 +2,7 @@ from flask import request
 from flask_restx import Namespace, Resource, fields
 import re
 from models.contacts import ContactModel
+from flask_jwt_extended import jwt_required
 
 contact = Namespace("Contacts", "Contact list (email only) endpoints")
 
@@ -11,12 +12,18 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 def _is_email(s: str) -> bool:
     return isinstance(s, str) and EMAIL_RE.match(s.strip()) is not None
 
+class NullableString(fields.String):
+    __schema_type__ = ["string", "null"]
+    __schema_example__ = "nullable string"
+
+
 contact_model = contact.model(
     "Contact",
     {
         "contacts_pk": fields.Integer(readonly=True),
         "email": fields.String(required=True),
-        "name": fields.String(required=False),
+        "name": NullableString(required=False),
+        "list_id": fields.Integer(required=False, default=1),
         "ativo": fields.Boolean(required=False, default=True),
     },
 )
@@ -24,9 +31,21 @@ contact_model = contact.model(
 
 @contact.route("/")
 class ContactList(Resource):
+    @jwt_required()
     @contact.marshal_list_with(contact_model)
     def get(self):
-        return ContactModel.query.order_by(ContactModel.contacts_pk.desc()).all()
+        list_id_param = request.args.get("list_id")
+        query = ContactModel.query.filter_by(ativo=True)
+
+        if list_id_param is not None:
+            try:
+                list_id = int(list_id_param)
+                if list_id > 0:
+                    query = query.filter_by(list_id=list_id)
+            except ValueError:
+                pass
+
+        return query.order_by(ContactModel.contacts_pk.desc()).all()
 
     @contact.expect(contact_model, validate=True)
     @contact.marshal_with(contact_model, code=201)
@@ -38,24 +57,27 @@ class ContactList(Resource):
             contact.abort(400, "Email is required")
 
         name = (data.get("name") or "").strip() or None
+        list_id = int(data.get("list_id") or 1)
         ativo = data.get("ativo", True)
 
-        existing_contact = ContactModel.find_by_email(email)
+        existing_contact = ContactModel.find_by_email(email, list_id=list_id)
         if existing_contact:
             existing_contact.update(ativo=True, name=name or existing_contact.name)
             return existing_contact, 201
 
-        new_contact = ContactModel(email=email, name=name, ativo=ativo)
+        new_contact = ContactModel(email=email, name=name, list_id=list_id, ativo=ativo)
         new_contact.save()
         return new_contact, 201
 
 
 @contact.route("/bulk")
 class ContactBulkList(Resource):
+    @jwt_required()
     def post(self):
         from sql_alchemy import banco
         data = request.get_json(silent=True) or {}
         contacts_list = data.get("contacts") or []
+        default_list_id = int(data.get("list_id") or 1)
 
         if not isinstance(contacts_list, list) or not contacts_list:
             return {"message": "Campo 'contacts' deve ser uma lista não vazia."}, 400
@@ -69,13 +91,14 @@ class ContactBulkList(Resource):
                 continue
 
             name = (item.get("name") or "").strip() or None
+            list_id = int(item.get("list_id") or default_list_id)
 
-            existing = ContactModel.find_by_email(email)
+            existing = ContactModel.find_by_email(email, list_id=list_id)
             if existing:
                 existing.update(ativo=True, name=name or existing.name)
                 updated_count += 1
             else:
-                new_contact = ContactModel(email=email, name=name, ativo=True)
+                new_contact = ContactModel(email=email, name=name, list_id=list_id, ativo=True)
                 banco.session.add(new_contact)
                 added_count += 1
 
@@ -83,8 +106,10 @@ class ContactBulkList(Resource):
         return {
             "message": "Importação em lote concluída",
             "added": added_count,
-            "updated": updated_count
+            "updated": updated_count,
+            "list_id": default_list_id
         }, 201
+
 
 
 @contact.route("/subscribe")
@@ -374,7 +399,19 @@ class ContactSubscribePage(Resource):
 class ContactUnsubscribe(Resource):
     def get(self):
         from flask import request, make_response
-        email = request.args.get("email")
+        import urllib.parse
+
+        # Extract email from raw query_string to avoid converting '+' to space
+        email = None
+        qs = request.query_string.decode("utf-8") if request.query_string else ""
+        for param in qs.split("&"):
+            if param.startswith("email="):
+                email = urllib.parse.unquote(param.split("=", 1)[1])
+                break
+
+        if not email:
+            email = request.args.get("email")
+
         if not email:
             return make_response(
                 "<html><body><div style='text-align: center; margin-top: 50px; font-family: sans-serif;'>"
@@ -385,11 +422,14 @@ class ContactUnsubscribe(Resource):
         email = email.strip().lower()
         obj = ContactModel.find_by_email(email)
         if not obj:
+            # Create a new contact as inactive so they don't receive emails
+            obj = ContactModel(email=email, name=None, ativo=False)
+            obj.save()
             return make_response(
                 "<html><body><div style='text-align: center; margin-top: 50px; font-family: sans-serif;'>"
-                "<h2>Subscription Cancelled / Inscrição Cancelada</h2>"
-                "<p>O e-mail <b>" + email + "</b> não está cadastrado ou já foi desinscrito.</p>"
-                "<p>The email address <b>" + email + "</b> is not registered or has already been unsubscribed.</p>"
+                "<h2>Desinscrição Realizada com Sucesso / Unsubscribed Successfully</h2>"
+                "<p>Seu e-mail <b>" + email + "</b> foi removido da nossa newsletter e você não receberá novos e-mails.</p>"
+                "<p>Your email <b>" + email + "</b> has been removed from our newsletter list.</p>"
                 "</div></body></html>", 200
             )
 
@@ -405,6 +445,7 @@ class ContactUnsubscribe(Resource):
 
 @contact.route("/<int:contacts_pk>")
 class Contact(Resource):
+    @jwt_required()
     @contact.marshal_with(contact_model)
     def get(self, contacts_pk):
         obj = ContactModel.find(contacts_pk)
@@ -412,6 +453,7 @@ class Contact(Resource):
             contact.abort(404, "Contact not found")
         return obj
 
+    @jwt_required()
     @contact.expect(contact_model)
     @contact.marshal_with(contact_model)
     def put(self, contacts_pk):
@@ -436,6 +478,7 @@ class Contact(Resource):
 
         return obj
 
+    @jwt_required()
     def delete(self, contacts_pk):
         obj = ContactModel.find(contacts_pk)
         if not obj:
