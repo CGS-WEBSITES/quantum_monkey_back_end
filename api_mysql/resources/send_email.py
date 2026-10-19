@@ -4,8 +4,11 @@ import re
 import zipfile
 import xml.etree.ElementTree as ET
 from io import BytesIO
+from email.utils import make_msgid
 from werkzeug.datastructures import FileStorage
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
+from config import SECRET_KEY, INVOICER_URL
 from email_sender import send
 from models.contacts import ContactModel
 from models.email_logs import EmailLogModel
@@ -476,6 +479,176 @@ class SenderParseInvoices(Resource):
             return {"message": f"Erro ao processar planilha: {str(e)}"}, 500
 
 
+INVOICE_TEST_RECIPIENT = "luiseduardoekenya7@gmail.com"
+INVOICE_FINANCE_CONTACTS = ["admin@wearecgs.com", "marcio@wearecgs.com", "pmo@wearecgs.com"]
+INVOICE_REQUEST_MAX_AGE = 60 * 60 * 24 * 90  # links do gerador valem 90 dias
+
+INVOICE_EMAIL_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Invoice Confirmation</title>
+    <style>
+        body {{
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+            color: #222222;
+        }}
+        p {{
+            margin: 0 0 16px 0;
+        }}
+        ol {{
+            margin: 0 0 16px 20px;
+            padding: 0;
+        }}
+        li {{
+            margin-bottom: 6px;
+        }}
+        a {{
+            color: #1155cc;
+            text-decoration: underline;
+        }}
+        .signature-table {{
+            margin-top: 30px;
+            border-top: 1px solid #e0e0e0;
+            padding-top: 20px;
+        }}
+    </style>
+</head>
+<body>
+    <p>Dear {name},</p>
+
+    <p>I trust this email finds you in good health. We want to express our sincere appreciation for the exceptional work you've been contributing as a valuable member of our team. Your dedication and commitment to our projects are highly regarded.</p>
+
+    <p>We are reaching out to confirm the amount owed to you for the services you've provided. {payment_text}</p>
+
+    <p>Please take a moment to review this amount and cross-check it with your records and do let us know if you find any discrepancies.</p>
+
+    <p>To make the payment process smoother, we kindly request that you submit your invoice by {due_date}. To ensure a seamless and punctual payment, please include the following details in your invoice:</p>
+
+    <ol>
+        <li>Your full name or company name.</li>
+        <li>Invoice dates.</li>
+        <li>A comprehensive breakdown of services provided, including descriptions, quantities, and rates.</li>
+        <li>Payment due date: {due_date}.</li>
+    </ol>
+
+    <p>You can send your invoice by replying to this email, addressing it to all relevant contacts (<a href="mailto:admin@wearecgs.com">admin@wearecgs.com</a>, <a href="mailto:marcio@wearecgs.com">marcio@wearecgs.com</a>, <a href="mailto:pmo@wearecgs.com">pmo@wearecgs.com</a>). If you have any questions or require further information, please don't hesitate to get in touch with our finance department at the previously mentioned email addresses.</p>
+
+    <p>We fully understand the importance of timely payments and remain committed to ensuring that you receive your compensation promptly. Your cooperation in promptly submitting the invoice will greatly assist us in achieving this goal.</p>
+{generator_html}
+    <p>Moreover, you have the option to generate your invoice directly through the Wise website using the following link: <a href="https://wise.com/us/invoice-generator" target="_blank">https://wise.com/us/invoice-generator</a>.</p>
+
+    <p>If you need assistance with creating your invoice, please refer to the following link: <a href="https://www.notion.so/wearecgs/External-invoice-creation-wise-54053bda0fce420281a1accee381e549?pvs=4" target="_blank">https://www.notion.so/wearecgs/External-invoice-creation-wise-54053bda0fce420281a1accee381e549?pvs=4</a>.</p>
+
+    <p>Once again, we want to express our gratitude for your unwavering dedication to our projects, and we eagerly anticipate the continuation of our successful collaboration.</p>
+
+    <p>Thank you for your attention to this matter.</p>
+
+    <p>Best regards,</p>
+
+    <table class="signature-table" border="0" cellpadding="0" cellspacing="0">
+        <tr>
+            <td style="padding-right: 15px; vertical-align: top;">
+                <img src="https://druna-assets.s3.us-east-2.amazonaws.com/cgs_logo.jpg" width="80" height="80" style="border-radius: 12px; object-fit: contain; border: 1px solid #e0e0e0; background: #ffffff; padding: 4px;" alt="CGS Logo">
+            </td>
+            <td style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.4; color: #333333; vertical-align: top;">
+                <strong style="color: #fb8c00; font-size: 16px;">{sender_name}</strong><br>
+                Finance & Operations Analyst<br>
+                CGS Group LLC<br>
+                Creative Games Studio | Games ForFun<br>
+                <br>
+                ✉️ <a href="mailto:admin@wearecgs.com">admin@wearecgs.com</a><br>
+                🌐 <a href="https://wearecgs.com">wearecgs.com</a><br>
+                🎮 Discord ID: barbaradelmas
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
+"""
+
+INVOICE_GENERATOR_HTML = """
+    <p>To make it even easier, you can generate your invoice already filled in with these amounts and reply to this email in one click:</p>
+    <p><a href="{link}" target="_blank" style="display: inline-block; padding: 10px 22px; background-color: #26d980; color: #0c0c0e; text-decoration: none; border-radius: 8px; font-weight: bold;">Generate my invoice</a></p>
+"""
+
+
+def _invoice_serializer():
+    return URLSafeTimedSerializer(SECRET_KEY, salt="invoice-request")
+
+
+def _invoice_subject(month_year):
+    return f"CGS ::: Confirmation of Payment Amount and Request for Invoice Submission Invoices Staff – {month_year}"
+
+
+def _invoice_payment_text(salary_usd, extra_usd, profit_usd):
+    profit_text = ""
+    if profit_usd > 0:
+        profit_text = f" And more $ {profit_usd:.2f} USD for profit distribution."
+
+    if extra_usd > 0:
+        return f"According to our records, <strong>the total amount is $ {salary_usd:.2f} USD, plus a reimbursement for lunch and other associated costs totaling $ {extra_usd:.2f} USD.</strong>{profit_text}"
+    return f"According to our records, <strong>the total amount is $ {salary_usd:.2f} USD.</strong>{profit_text}"
+
+
+def _invoice_generator_link(request_data):
+    """Link assinado para o gerador de invoice do Email-Editor (/invoice?t=...)."""
+    if not INVOICER_URL:
+        return ""
+    token = _invoice_serializer().dumps(request_data)
+    return f"{INVOICER_URL.rstrip('/')}/invoice?t={token}"
+
+
+def _send_invoice_email(invoice, month_year, due_date, is_test, sender_name, sender_email):
+    """Envia o e-mail de confirmação para um colaborador. Retorna a mensagem de erro, ou None se enviou."""
+    name = invoice.get("name")
+    salary_usd = float(invoice.get("salary_usd") or 0)
+    extra_usd = float(invoice.get("extra_usd") or 0)
+    profit_usd = float(invoice.get("profit_usd") or 0)
+
+    recipient = INVOICE_TEST_RECIPIENT if is_test else invoice.get("email")
+    if not recipient:
+        return "E-mail do destinatário não encontrado."
+
+    subject = _invoice_subject(month_year)
+    # Message-ID próprio para que a resposta gerada pelo colaborador caia na mesma thread
+    message_id = make_msgid(domain="wearecgs.com")
+
+    if is_test:
+        reply_to = [INVOICE_TEST_RECIPIENT]
+    else:
+        reply_to = list(dict.fromkeys([sender_email] + INVOICE_FINANCE_CONTACTS))
+
+    link = _invoice_generator_link({
+        "name": name,
+        "month_year": month_year,
+        "due_date": due_date,
+        "salary_usd": round(salary_usd, 2),
+        "extra_usd": round(extra_usd, 2),
+        "profit_usd": round(profit_usd, 2),
+        "subject": subject,
+        "message_id": message_id,
+        "reply_to": reply_to,
+    })
+
+    body = INVOICE_EMAIL_TEMPLATE.format(
+        name=name,
+        payment_text=_invoice_payment_text(salary_usd, extra_usd, profit_usd),
+        due_date=due_date,
+        sender_name=sender_name,
+        generator_html=INVOICE_GENERATOR_HTML.format(link=link) if link else "",
+    )
+
+    resp = send(recipient, subject, body, sender=sender_email, use_ses=False, headers={"Message-ID": message_id})
+    # send() devolve (dict, 500) em caso de falha
+    if isinstance(resp, tuple) or (isinstance(resp, dict) and "error" in resp):
+        return _extract_error_message(resp)
+    return None
+
+
 @sender.route("/send_invoice_single")
 class SenderSendInvoiceSingle(Resource):
     def post(self):
@@ -494,134 +667,15 @@ class SenderSendInvoiceSingle(Resource):
         if not due_date:
             return {"message": "Data de vencimento 'due_date' é obrigatória."}, 400
 
-        name = invoice.get("name")
-        email = invoice.get("email")
-        salary_usd = float(invoice.get("salary_usd", 0))
-        extra_usd = float(invoice.get("extra_usd", 0))
-        profit_usd = float(invoice.get("profit_usd", 0))
-        total_usd = salary_usd + extra_usd + profit_usd
-
-        # Subject
-        subject = f"CGS ::: Confirmation of Payment Amount and Request for Invoice Submission Invoices Staff – {month_year}"
-
-        # Construct dynamic payment text
-        profit_text = ""
-        if profit_usd > 0:
-            profit_text = f" And more $ {profit_usd:.2f} USD for profit distribution."
-
-        if extra_usd > 0:
-            payment_text = f"According to our records, <strong>the total amount is $ {salary_usd:.2f} USD, plus a reimbursement for lunch and other associated costs totaling $ {extra_usd:.2f} USD.</strong>{profit_text}"
-        else:
-            payment_text = f"According to our records, <strong>the total amount is $ {salary_usd:.2f} USD.</strong>{profit_text}"
-
-        html_template = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <title>Invoice Confirmation</title>
-            <style>
-                body {{
-                    font-family: Arial, Helvetica, sans-serif;
-                    font-size: 14px;
-                    line-height: 1.5;
-                    color: #222222;
-                }}
-                p {{
-                    margin: 0 0 16px 0;
-                }}
-                ol {{
-                    margin: 0 0 16px 20px;
-                    padding: 0;
-                }}
-                li {{
-                    margin-bottom: 6px;
-                }}
-                a {{
-                    color: #1155cc;
-                    text-decoration: underline;
-                }}
-                .signature-table {{
-                    margin-top: 30px;
-                    border-top: 1px solid #e0e0e0;
-                    padding-top: 20px;
-                }}
-            </style>
-        </head>
-        <body>
-            <p>Dear {name},</p>
-            
-            <p>I trust this email finds you in good health. We want to express our sincere appreciation for the exceptional work you've been contributing as a valuable member of our team. Your dedication and commitment to our projects are highly regarded.</p>
-            
-            <p>We are reaching out to confirm the amount owed to you for the services you've provided. {payment_text}</p>
-            
-            <p>Please take a moment to review this amount and cross-check it with your records and do let us know if you find any discrepancies.</p>
-            
-            <p>To make the payment process smoother, we kindly request that you submit your invoice by {due_date}. To ensure a seamless and punctual payment, please include the following details in your invoice:</p>
-            
-            <ol>
-                <li>Your full name or company name.</li>
-                <li>Invoice dates.</li>
-                <li>A comprehensive breakdown of services provided, including descriptions, quantities, and rates.</li>
-                <li>Payment due date: {due_date}.</li>
-            </ol>
-            
-            <p>You can send your invoice by replying to this email, addressing it to all relevant contacts (<a href="mailto:admin@wearecgs.com">admin@wearecgs.com</a>, <a href="mailto:marcio@wearecgs.com">marcio@wearecgs.com</a>, <a href="mailto:pmo@wearecgs.com">pmo@wearecgs.com</a>). If you have any questions or require further information, please don't hesitate to get in touch with our finance department at the previously mentioned email addresses.</p>
-            
-            <p>We fully understand the importance of timely payments and remain committed to ensuring that you receive your compensation promptly. Your cooperation in promptly submitting the invoice will greatly assist us in achieving this goal.</p>
-            
-            <p>Moreover, you have the option to generate your invoice directly through the Wise website using the following link: <a href="https://wise.com/us/invoice-generator" target="_blank">https://wise.com/us/invoice-generator</a>.</p>
-            
-            <p>If you need assistance with creating your invoice, please refer to the following link: <a href="https://www.notion.so/wearecgs/External-invoice-creation-wise-54053bda0fce420281a1accee381e549?pvs=4" target="_blank">https://www.notion.so/wearecgs/External-invoice-creation-wise-54053bda0fce420281a1accee381e549?pvs=4</a>.</p>
-            
-            <p>Once again, we want to express our gratitude for your unwavering dedication to our projects, and we eagerly anticipate the continuation of our successful collaboration.</p>
-            
-            <p>Thank you for your attention to this matter.</p>
-            
-            <p>Best regards,</p>
-            
-            <table class="signature-table" border="0" cellpadding="0" cellspacing="0">
-                <tr>
-                    <td style="padding-right: 15px; vertical-align: top;">
-                        <img src="https://druna-assets.s3.us-east-2.amazonaws.com/cgs_logo.jpg" width="80" height="80" style="border-radius: 12px; object-fit: contain; border: 1px solid #e0e0e0; background: #ffffff; padding: 4px;" alt="CGS Logo">
-                    </td>
-                    <td style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.4; color: #333333; vertical-align: top;">
-                        <strong style="color: #fb8c00; font-size: 16px;">{sender_name}</strong><br>
-                        Finance & Operations Analyst<br>
-                        CGS Group LLC<br>
-                        Creative Games Studio | Games ForFun<br>
-                        <br>
-                        ✉️ <a href="mailto:admin@wearecgs.com">admin@wearecgs.com</a><br>
-                        🌐 <a href="https://wearecgs.com">wearecgs.com</a><br>
-                        🎮 Discord ID: barbaradelmas
-                    </td>
-                </tr>
-            </table>
-        </body>
-        </html>
-        """
-
-        body = html_template.format(
-            name=name,
-            payment_text=payment_text,
-            due_date=due_date,
-            sender_name=sender_name
-        )
-
-        recipient = "luiseduardoekenya7@gmail.com" if test_mode else email
-        if not recipient:
-            return {"message": "E-mail do destinatário não encontrado."}, 400
-
         try:
-            resp = send(recipient, subject, body, sender=sender_email, use_ses=False)
-            if isinstance(resp, dict) and "error" in resp:
-                return {"message": resp["error"]}, 500
-            
-            # Log single email in DB if we want, or just return success
-            return {"message": "E-mail enviado com sucesso!"}, 200
+            error = _send_invoice_email(invoice, month_year, due_date, test_mode, sender_name, sender_email)
         except Exception as e:
             return {"message": str(e)}, 500
 
+        if error:
+            status = 400 if error == "E-mail do destinatário não encontrado." else 500
+            return {"message": error}, status
+        return {"message": "E-mail enviado com sucesso!"}, 200
 
 
 @sender.route("/send_invoices")
@@ -642,10 +696,8 @@ class SenderSendInvoices(Resource):
         if not due_date:
             return {"message": "Data de vencimento 'due_date' é obrigatória."}, 400
 
-        # Log entry
-        subject_template = f"CGS ::: Confirmation of Payment Amount and Request for Invoice Submission Invoices Staff – {month_year}"
         log_entry = EmailLogModel(
-            subject=subject_template,
+            subject=_invoice_subject(month_year),
             recipient_count=len(invoices),
             status="Sending"
         )
@@ -660,134 +712,16 @@ class SenderSendInvoices(Resource):
                 sent_count = 0
                 failed_count = 0
 
-                html_template = """
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <meta charset="utf-8">
-                    <title>Invoice Confirmation</title>
-                    <style>
-                        body {{
-                            font-family: Arial, Helvetica, sans-serif;
-                            font-size: 14px;
-                            line-height: 1.5;
-                            color: #222222;
-                        }}
-                        p {{
-                            margin: 0 0 16px 0;
-                        }}
-                        ol {{
-                            margin: 0 0 16px 20px;
-                            padding: 0;
-                        }}
-                        li {{
-                            margin-bottom: 6px;
-                        }}
-                        a {{
-                            color: #1155cc;
-                            text-decoration: underline;
-                        }}
-                        .signature-table {{
-                            margin-top: 30px;
-                            border-top: 1px solid #e0e0e0;
-                            padding-top: 20px;
-                        }}
-                    </style>
-                </head>
-                <body>
-                    <p>Dear {name},</p>
-                    
-                    <p>I trust this email finds you in good health. We want to express our sincere appreciation for the exceptional work you've been contributing as a valuable member of our team. Your dedication and commitment to our projects are highly regarded.</p>
-                    
-                    <p>We are reaching out to confirm the amount owed to you for the services you've provided. {payment_text}</p>
-                    
-                    <p>Please take a moment to review this amount and cross-check it with your records and do let us know if you find any discrepancies.</p>
-                    
-                    <p>To make the payment process smoother, we kindly request that you submit your invoice by {due_date}. To ensure a seamless and punctual payment, please include the following details in your invoice:</p>
-                    
-                    <ol>
-                        <li>Your full name or company name.</li>
-                        <li>Invoice dates.</li>
-                        <li>A comprehensive breakdown of services provided, including descriptions, quantities, and rates.</li>
-                        <li>Payment due date: {due_date}.</li>
-                    </ol>
-                    
-                    <p>You can send your invoice by replying to this email, addressing it to all relevant contacts (<a href="mailto:admin@wearecgs.com">admin@wearecgs.com</a>, <a href="mailto:marcio@wearecgs.com">marcio@wearecgs.com</a>, <a href="mailto:pmo@wearecgs.com">pmo@wearecgs.com</a>). If you have any questions or require further information, please don't hesitate to get in touch with our finance department at the previously mentioned email addresses.</p>
-                    
-                    <p>We fully understand the importance of timely payments and remain committed to ensuring that you receive your compensation promptly. Your cooperation in promptly submitting the invoice will greatly assist us in achieving this goal.</p>
-                    
-                    <p>Moreover, you have the option to generate your invoice directly through the Wise website using the following link: <a href="https://wise.com/us/invoice-generator" target="_blank">https://wise.com/us/invoice-generator</a>.</p>
-                    
-                    <p>If you need assistance with creating your invoice, please refer to the following link: <a href="https://www.notion.so/wearecgs/External-invoice-creation-wise-54053bda0fce420281a1accee381e549?pvs=4" target="_blank">https://www.notion.so/wearecgs/External-invoice-creation-wise-54053bda0fce420281a1accee381e549?pvs=4</a>.</p>
-                    
-                    <p>Once again, we want to express our gratitude for your unwavering dedication to our projects, and we eagerly anticipate the continuation of our successful collaboration.</p>
-                    
-                    <p>Thank you for your attention to this matter.</p>
-                    
-                    <p>Best regards,</p>
-                    
-                    <table class="signature-table" border="0" cellpadding="0" cellspacing="0">
-                        <tr>
-                            <td style="padding-right: 15px; vertical-align: top;">
-                                <img src="https://druna-assets.s3.us-east-2.amazonaws.com/cgs_logo.jpg" width="80" height="80" style="border-radius: 12px; object-fit: contain; border: 1px solid #e0e0e0; background: #ffffff; padding: 4px;" alt="CGS Logo">
-                            </td>
-                            <td style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.4; color: #333333; vertical-align: top;">
-                                <strong style="color: #fb8c00; font-size: 16px;">{sender_name}</strong><br>
-                                Finance & Operations Analyst<br>
-                                CGS Group LLC<br>
-                                Creative Games Studio | Games ForFun<br>
-                                <br>
-                                ✉️ <a href="mailto:admin@wearecgs.com">admin@wearecgs.com</a><br>
-                                🌐 <a href="https://wearecgs.com">wearecgs.com</a><br>
-                                🎮 Discord ID: barbaradelmas
-                            </td>
-                        </tr>
-                    </table>
-                </body>
-                </html>
-                """
-
                 for inv in inv_list:
-                    name = inv.get("name")
-                    email = inv.get("email")
-                    salary_usd = float(inv.get("salary_usd", 0))
-                    extra_usd = float(inv.get("extra_usd", 0))
-                    profit_usd = float(inv.get("profit_usd", 0))
-                    total_usd = salary_usd + extra_usd + profit_usd
-
-                    # Subject
-                    subject = f"CGS ::: Confirmation of Payment Amount and Request for Invoice Submission Invoices Staff – {m_y}"
-
-                    # Construct dynamic payment text
-                    profit_text = ""
-                    if profit_usd > 0:
-                        profit_text = f" And more $ {profit_usd:.2f} USD for profit distribution."
-
-                    if extra_usd > 0:
-                        payment_text = f"According to our records, <strong>the total amount is $ {salary_usd:.2f} USD, plus a reimbursement for lunch and other associated costs totaling $ {extra_usd:.2f} USD.</strong>{profit_text}"
-                    else:
-                        payment_text = f"According to our records, <strong>the total amount is $ {salary_usd:.2f} USD.</strong>{profit_text}"
-
-                    # Body format
-                    body = html_template.format(
-                        name=name,
-                        payment_text=payment_text,
-                        due_date=d_d,
-                        sender_name=s_name
-                    )
-
-                    recipient = "luiseduardoekenya7@gmail.com" if is_test else email
-
                     try:
-                        resp = send(recipient, subject, body, sender=s_email, use_ses=False)
-                        if isinstance(resp, dict) and "error" in resp:
-                            failed_count += 1
-                        else:
-                            sent_count += 1
-                    except Exception:
+                        error = _send_invoice_email(inv, m_y, d_d, is_test, s_name, s_email)
+                    except Exception as e:
+                        error = str(e)
+                    if error:
                         failed_count += 1
+                    else:
+                        sent_count += 1
 
-                # Update log status
                 log = EmailLogModel.query.get(log_id)
                 if log:
                     log.update(
@@ -796,7 +730,6 @@ class SenderSendInvoices(Resource):
                         failed_count=failed_count
                     )
 
-        # Start thread
         threading.Thread(
             target=bg_send_invoices,
             args=(invoices, month_year, due_date, test_mode, sender_name, sender_email, log_entry.id),
@@ -809,3 +742,16 @@ class SenderSendInvoices(Resource):
             "test_mode": test_mode,
             "log_id": log_entry.id
         }, 200
+
+
+@sender.route("/invoice_request/<string:token>")
+class SenderInvoiceRequest(Resource):
+    def get(self, token):
+        """Dados pré-preenchidos do gerador de invoice (link enviado no e-mail de confirmação)."""
+        try:
+            data = _invoice_serializer().loads(token, max_age=INVOICE_REQUEST_MAX_AGE)
+        except SignatureExpired:
+            return {"message": "Este link expirou. Peça um novo ao financeiro."}, 410
+        except BadSignature:
+            return {"message": "Link de invoice inválido."}, 400
+        return data, 200

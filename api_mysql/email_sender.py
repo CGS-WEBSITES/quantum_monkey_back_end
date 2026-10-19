@@ -20,7 +20,7 @@ def get_ses_client():
     )
 
 
-def append_to_sent_folder(subject, html_body, recipient, sender):
+def append_to_sent_folder(subject, html_body, recipient, sender, headers=None):
     import os
     import imaplib
     import time
@@ -55,6 +55,8 @@ def append_to_sent_folder(subject, html_body, recipient, sender):
         msg['Subject'] = subject
         msg['From'] = f"{sender} <{smtp_user}>" if "@" not in sender else sender
         msg['To'] = recipient
+        for key, value in (headers or {}).items():
+            msg[key] = value
         msg.attach(MIMEText(html_body, 'html', 'utf-8'))
 
         mail = imaplib.IMAP4_SSL(imap_host, imap_port, timeout=10)
@@ -85,7 +87,8 @@ def append_to_sent_folder(subject, html_body, recipient, sender):
         return False
 
 
-def send(recipient, subject, body, sender=None, use_ses=None):
+def send(recipient, subject, body, sender=None, use_ses=None, headers=None):
+    # headers: cabeçalhos extras (ex.: Message-ID) — aplicados apenas no envio via SMTP
     if not sender:
         sender = DEFAULT_SENDER
 
@@ -114,8 +117,10 @@ def send(recipient, subject, body, sender=None, use_ses=None):
             msg['Subject'] = subject
             msg['From'] = f"{sender} <{smtp_user}>" if "@" not in sender else sender
             msg['To'] = recipient
+            for key, value in (headers or {}).items():
+                msg[key] = value
             msg.attach(MIMEText(body, 'html', 'utf-8'))
-            
+
             if port == 465:
                 server = smtplib.SMTP_SSL(smtp_host, port, timeout=15)
             else:
@@ -128,7 +133,7 @@ def send(recipient, subject, body, sender=None, use_ses=None):
             
             # Tenta sincronizar a cópia na pasta Enviados via IMAP
             try:
-                append_to_sent_folder(subject, body, recipient, sender)
+                append_to_sent_folder(subject, body, recipient, sender, headers=headers)
             except Exception as imap_err:
                 print(f"Failed to append to IMAP sent folder: {imap_err}")
 

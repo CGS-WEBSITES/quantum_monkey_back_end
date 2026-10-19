@@ -14,6 +14,9 @@ SECRET_KEY = os.environ["SECRET_KEY"]
 GOOGLE_API_KEY = os.environ["GOOGLE_API_KEY"]
 API_BASE_URL = os.environ["API_BASE_URL"]
 
+# URL pública do Email-Editor (gerador de invoice). Se vazio, o e-mail sai sem o botão.
+INVOICER_URL = os.environ.get("INVOICER_URL")
+
 # AWS S3 (assets)
 AWS_S3_REGION = os.environ.get("AWS_S3_REGION")
 AWS_S3_ACCESS_KEY_ID = os.environ.get("AWS_S3_ACCESS_KEY_ID")
