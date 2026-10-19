@@ -73,7 +73,7 @@ class ContactList(Resource):
 
 @contact.route("/bulk")
 class ContactBulkList(Resource):
-    @jwt_required()
+    @jwt_required(optional=True)
     def post(self):
         from sql_alchemy import banco
         data = request.get_json(silent=True) or {}
